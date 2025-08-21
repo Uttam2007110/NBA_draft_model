@@ -31,7 +31,7 @@ from pandas.errors import SettingWithCopyWarning
 warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 
 #path = "C:/Users/GF63/Desktop/cricket/excel/bart"
-path = "C:/Users/Subramanya.Ganti/Downloads/cricket/excel/bart"
+path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/excel/bart"
 
 latest_season = 2025
 
@@ -96,7 +96,7 @@ def iqr_column(df,category):
     return df
 
 def international_stats_adjustments():
-    df = pd.read_excel(f'{path}/foreign_players.xlsx','final')
+    df = pd.read_excel(f'{path}/player/foreign_players.xlsx','final')
     df['TS%'] = df['TS%']*100
     
     df['mp'] = 10.2 + 25.7*(df['mp'].rank(pct=True))
@@ -126,7 +126,7 @@ def international_stats_adjustments():
     return df
 
 def pre_08_ncaa():
-    df = pd.read_excel(f'{path}/foreign_players.xlsx','ncaa')
+    df = pd.read_excel(f'{path}/player/foreign_players.xlsx','ncaa')
     #darren yates 2004 season has a ast/tov of infinity
     df['ast/tov'] = df['ast/tov'].replace(np.inf, 11)
     df['TS%'] = df['TS%']*100
@@ -163,7 +163,7 @@ def height_estimate(df):
     return df
 
 def extract_player_stats():
-    headers = pd.read_csv(f'{path}/header.csv')   
+    headers = pd.read_csv(f'{path}/player/header.csv')   
     internationals = international_stats_adjustments()
     pre_2008 = pre_08_ncaa()
     
@@ -177,7 +177,7 @@ def extract_player_stats():
         if(i < 2008):
             data_adj = pre_2008[pre_2008['season']==i]
         else:
-            data = pd.read_csv(f'{path}/{i}.csv', names=headers.columns)
+            data = pd.read_csv(f'{path}/player/{i}.csv', names=headers.columns)
             
             data['blocks']  = data['blk'] * data['GP']
             data['steals']  = data['stl'] * data['GP']
@@ -699,7 +699,7 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
 
 #%% call the player comparision function
 
-pdist,nba_comps = player_comp_analysis("Cooper Flagg", 2025, player_stats.copy(), nba_stats.copy(), 1)
+pdist,nba_comps = player_comp_analysis("Victor Wembanyama", 2023, player_stats.copy(), nba_stats.copy(), 1)
 
 #draft_list,exception_list = mdist_list(2016, player_stats.copy(),0,0)
 
