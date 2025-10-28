@@ -4,7 +4,7 @@ Created on Fri Oct 17 15:52:26 2025
 NBA Projections based on data from Dunks and Threes EPM
 @author: Subramanya.Ganti
 """
-#%% imports and functions
+#%% imports
 import numpy as np
 import pandas as pd
 
@@ -15,6 +15,43 @@ import json
 import ast
 
 pd.set_option('mode.chained_assignment', None)
+
+gw = 2
+gd = 0  #set this to 0 to get the whole game week
+
+#%% functions
+def get_player_info():
+    
+    url = "https://nbafantasy.nba.com/api/bootstrap-static/"
+    r = requests.get(url,verify=False)
+    json = r.json()
+    elements = pd.DataFrame(json['elements'])
+    elements['name'] = elements['first_name'] + ' ' + elements['second_name']
+    teams = pd.DataFrame(json['teams'])
+    
+    elements = elements[['code','id','name','now_cost','team','element_type']]
+    teams = teams[['id','name','short_name']]
+    return(elements,teams)
+
+def get_fixture_info(player_info):
+    
+    fixtures = []
+    
+    for i in player_info['id']:
+        url = "https://nbafantasy.nba.com/api/element-summary/"+str(i)+"/"
+        r = requests.get(url,verify=False)
+        json = r.json()
+        if json == {'detail': 'Not found.'}:
+            continue
+        else:
+            data=pd.DataFrame(json['fixtures'])
+            data["id"] = i
+            data=data[["team_h", "team_a", "event_name", "is_home", "id"]]
+            fixtures.append(data)
+
+    fixtures=pd.concat(fixtures)
+    
+    return(fixtures)
 
 def extract_epm_data():
     headers = {
@@ -74,7 +111,7 @@ def convert_string_list_to_dict(string_list):
 
 def mins_adjustment(full):
     adjusted = []
-    full['p_mp_48'] *= 1.2
+    full['p_mp_48'] *= 1.1
     for t in full['team_alias'].unique():
         print(t)
         outfielders = full[full['team_alias']==t]
@@ -129,6 +166,7 @@ def injury_status():
     return injuries
 
 def matchup_stats(home,away,matchup,team):
+    print()
     game_pace = (matchup.loc[matchup['team_alias']==home,'adj_pace'].values[0] + matchup.loc[matchup['team_alias']==away,'adj_pace'].values[0]) / 2
     game_pace *= (98.75/ matchup['adj_pace'].mean()) # 95 for the playoffs
     
@@ -166,6 +204,7 @@ def matchup_stats(home,away,matchup,team):
     team.loc[team['team_alias']==home,'drb'] *= home_adj
     team.loc[team['team_alias']==home,'stl'] *= home_adj
     team.loc[team['team_alias']==home,'blk'] *= home_adj
+    team.loc[team['team_alias']==home,'opponent'] = away
     team.loc[team['team_alias']==away,'pts'] *= away_adj
     team.loc[team['team_alias']==away,'ast'] *= away_adj
     team.loc[team['team_alias']==away,'tov'] *= away_adj
@@ -173,12 +212,37 @@ def matchup_stats(home,away,matchup,team):
     team.loc[team['team_alias']==away,'drb'] *= away_adj
     team.loc[team['team_alias']==away,'stl'] *= away_adj
     team.loc[team['team_alias']==away,'blk'] *= away_adj
+    team.loc[team['team_alias']==away,'opponent'] = home
     
-    team = team[['player_id', 'player_name', 'team_alias', 'injury', 'p_mp_48', 'pts', 'ast', 'tov', 'orb', 'drb', 'stl', 'blk']]
+    team = team[['player_id', 'player_name', 'team_alias', 'opponent','injury', 'p_mp_48', 'pts', 'ast', 'tov', 'orb', 'drb', 'stl', 'blk']]
     team['EV'] = team['pts'] + team['orb']+ team['drb']+ 2*team['ast']+ 3*team['blk']+ 3*team['stl']
     print(home,round(team.loc[team['team_alias']==home,'pts'].sum(),2))
     print(away,round(team.loc[team['team_alias']==away,'pts'].sum(),2))
     return team
+
+#%% player names
+player_names,team_id = get_player_info()
+player_names = player_names.loc[player_names['code']>1]
+player_names = player_names.sort_values(['now_cost', 'team'], ascending=[False, True])
+
+#%% fixtures by team
+#team_list = player_names.groupby('team').first()
+#team_list = team_list.reset_index()
+fixtures = get_fixture_info(player_names.groupby('team').first().reset_index())
+fixtures = fixtures.drop('id',axis=1)
+fixtures['event_name'] = fixtures['event_name'].str.replace('Gameweek ', 'GD_')
+fixtures['event_name'] = fixtures['event_name'].str.replace(" - Day ", "_") 
+fixtures[['event_name', 'gameweek','gameday']] = fixtures['event_name'].str.split('_', expand=True)
+
+gw_fixtures = fixtures[(fixtures['gameweek']==str(gw))&(fixtures['is_home']==True)]
+gw_fixtures = gw_fixtures[['team_h', 'team_a', 'gameweek', 'gameday']]
+gw_fixtures = gw_fixtures.merge(team_id, left_on=['team_h'], right_on=['id'], how='left')
+gw_fixtures = gw_fixtures.merge(team_id, left_on=['team_a'], right_on=['id'], how='left')
+
+if(gd != 0):
+    gw_fixtures = gw_fixtures[gw_fixtures['gameday']==str(gd)]
+else:
+    gw_fixtures = gw_fixtures
 
 #%% extract data from dunks and threes
 player_data = extract_epm_data()
@@ -217,4 +281,30 @@ matchup['rating'] = matchup['adj_off'] + matchup['adj_def']
 matchup = matchup.reset_index()
 
 #%% game level projections
-game_stats = matchup_stats('MIA', 'CHA', matchup, df_adj.copy())
+#game_stats = matchup_stats('OKC', 'SAC', matchup, df_adj.copy())
+gw_summary = []
+for f in gw_fixtures.values:
+    game_stats = matchup_stats(f[6], f[9], matchup, df_adj.copy())
+    game_stats['week'] = f[2]
+    game_stats['day'] = f[3]
+    gw_summary.append(game_stats)
+del f
+
+gw_summary = pd.concat(gw_summary)
+gw_pivot = pd.pivot_table(gw_summary, index=['player_id','player_name'], columns=['day'], values=['EV'])
+gw_pivot.columns = gw_pivot.columns.droplevel(0)
+gw_pivot['EV total'] = gw_pivot.sum(axis=1, skipna=True)
+gw_pivot = gw_pivot.reset_index()
+gw_pivot = gw_pivot.sort_values(by='EV total', ascending=False)
+gw_pivot = gw_pivot.merge(player_names[['code','now_cost']], left_on=['player_id'], right_on=['code'], how='left')
+gw_pivot = gw_pivot.drop('code', axis=1)
+gw_pivot['efficiency'] = gw_pivot['EV total'] / gw_pivot['now_cost'] 
+
+print()
+print("the gw_summary and gw_pivot are the dataframes with the results")
+print()
+print("top 10 players for the chosen time frame are")
+print(gw_pivot[['player_name','EV total']].head(10))
+print()
+print("top 10 cost effective players for the chosen time frame are")
+print(gw_pivot.sort_values(by='efficiency', ascending=False).head(10)[['player_name','efficiency']].head(10))
