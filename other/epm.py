@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Created on Fri Oct 17 15:52:26 2025
-
+NBA Projections based on data from Dunks and Threes EPM
 @author: Subramanya.Ganti
 """
+#%% imports and functions
 import numpy as np
 import pandas as pd
 
@@ -13,25 +14,23 @@ import re
 import json
 import ast
 
+pd.set_option('mode.chained_assignment', None)
+
 def extract_epm_data():
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
     }
     
-    # The URL for the Estimated Plus-Minus (EPM) leaderboard
-    url = 'https://dunksandthrees.com/epm?m=p_mp_48&team=CHA'
+    url = 'https://dunksandthrees.com/epm'
     
-    # Send a GET request to the URL
     try:
         response = requests.get(url, verify=False, headers=headers)
         response.raise_for_status()  # Raise an exception for bad status codes
     except requests.exceptions.RequestException as e:
         print(f"Error fetching the URL: {e}")
     
-    # Parse the HTML content of the page with BeautifulSoup
     data = response.text
     soup = BeautifulSoup(data, 'html.parser')
-    
     script_tags = soup.find_all('script')
     script_contents = []
     
@@ -39,11 +38,8 @@ def extract_epm_data():
         if script.string:  # Check if the script tag has content
             script_contents.append(script.string.strip())    
     
-    # Find all occurrences after 'type:"data"'
     pattern = r'\{season:2026,game_dt.*?\}'
     matches = re.findall(pattern, data)
-    
-    # Store in a list
     data_list = [match.strip() for match in matches]
     return data_list
 
@@ -53,6 +49,7 @@ def modify_strings(list_of_s):
         s = s.replace(',', ',' + '"')
         s = s.replace(':', '"' + ':')
         s = s.replace('{', '{"')
+        s = s.replace('null','0')
         mod_list.append(s)
     return mod_list
 
@@ -78,7 +75,7 @@ def convert_string_list_to_dict(string_list):
 def mins_adjustment(full):
     adjusted = []
     full['p_mp_48'] *= 1.2
-    for t in df['team_alias'].unique():
+    for t in full['team_alias'].unique():
         print(t)
         outfielders = full[full['team_alias']==t]
         outfielders = outfielders.sort_values(by='p_mp_48', ascending=False)
@@ -99,12 +96,104 @@ def mins_adjustment(full):
     adjusted = pd.concat(adjusted)
     return adjusted
 
+def injury_status():
+    injuries = pd.read_html('https://sports.yahoo.com/nba/injuries/')
+    injuries = pd.concat(injuries)
+    injuries = injuries[['Player','Pos','Status','Date']]
+    injuries = injuries.dropna()
+    injuries['Player'] = injuries['Player'].str.replace('í','i')
+    injuries['Player'] = injuries['Player'].str.replace('č','c')
+    injuries['Player'] = injuries['Player'].str.replace('Č','C')
+    injuries['Player'] = injuries['Player'].str.replace('ić','ic')
+    injuries['Player'] = injuries['Player'].str.replace('ö','o')
+    injuries['Player'] = injuries['Player'].str.replace('é','e')
+    injuries['Player'] = injuries['Player'].str.replace('ü','u')
+    injuries['Player'] = injuries['Player'].str.replace('ņ','n')
+    injuries['Player'] = injuries['Player'].str.replace('ģ','g')
+    injuries['Player'] = injuries['Player'].str.replace('ô','o')
+    injuries['Player'] = injuries['Player'].str.replace('ū','u')
+    injuries['Player'] = injuries['Player'].str.replace('Ş','S')
+    injuries['Player'] = injuries['Player'].str.replace('Š','S')
+    injuries['Player'] = injuries['Player'].str.replace('è','e')
+    #injuries['Player'] = injuries['Player'].str.replace('P.J. Washington Jr.','P.J. Washington')
+    #injuries['Player'] = injuries['Player'].str.replace('GG Jackson II','GG Jackson')
+    #injuries['Player'] = injuries['Player'].str.replace('Xavier Tillman Sr.','Xavier Tillman')
+    #injuries['Player'] = injuries['Player'].str.replace('Jeff Dowtin Jr.','Jeff Dowtin')
+    #injuries['Player'] = injuries['Player'].str.replace('Craig Porter Jr.','Craig Porter')
+    #injuries['Player'] = injuries['Player'].str.replace('Ron Holland II','Ronald Holland II')
+    #injuries['Player'] = injuries['Player'].str.replace('Tolu Smith III','Tolu Smith')
+    #injuries['Player'] = injuries['Player'].str.replace('Trey Jemison III','Trey Jemison')
+    #injuries['Player'] = injuries['Player'].str.replace('AJ Green','A.J. Green')
+    #injuries['Player'] = injuries['Player'].str.replace('KJ Simpson','K.J. Simpson')
+    #injuries['Player'] = injuries['Player'].str.replace('KJ Martin','Kenyon Martin Jr.')
+    return injuries
+
+def matchup_stats(home,away,matchup,team):
+    game_pace = (matchup.loc[matchup['team_alias']==home,'adj_pace'].values[0] + matchup.loc[matchup['team_alias']==away,'adj_pace'].values[0]) / 2
+    game_pace *= (98.75/ matchup['adj_pace'].mean()) # 95 for the playoffs
+    
+    home_pace_factor = game_pace/matchup.loc[matchup['team_alias']==home,'adj_pace'].values[0]
+    away_pace_factor = game_pace/matchup.loc[matchup['team_alias']==away,'adj_pace'].values[0]
+    
+    #team = df_adj.copy()
+    team = team[(team['team_alias']==home)|(team['team_alias']==away)]
+    team.loc[team['team_alias']==home,'pace factor'] = home_pace_factor
+    team.loc[team['team_alias']==away,'pace factor'] = away_pace_factor
+    
+    home_usage = (team.loc[team['team_alias']==home,'p_usg'] * team.loc[team['team_alias']==home,'p_mp_48']/48).sum()
+    team.loc[team['team_alias']==home,'factor'] = (1/home_usage)
+    away_usage = (team.loc[team['team_alias']==away,'p_usg'] * team.loc[team['team_alias']==away,'p_mp_48']/48).sum()
+    team.loc[team['team_alias']==away,'factor'] = (1/away_usage)
+    
+    team['pts'] = team['p_pts_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
+    team['ast'] = team['p_ast_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
+    team['tov'] = team['p_tov_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
+    team['orb'] = team['p_orb_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
+    team['drb'] = team['p_drb_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
+    team['stl'] = team['p_stl_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
+    team['blk'] = team['p_blk_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
+    
+    rating_adj = matchup.loc[matchup['team_alias']==home,'rating'].values[0] - matchup.loc[matchup['team_alias']==away,'rating'].values[0] + 2.5
+    home_pts = team.loc[team['team_alias']==home,'pts'].sum()
+    away_pts = team.loc[team['team_alias']==away,'pts'].sum()
+    home_adj = (home_pts + (rating_adj - (home_pts - away_pts))/2)/home_pts
+    away_adj = (away_pts - (rating_adj - (home_pts - away_pts))/2)/away_pts
+    
+    team.loc[team['team_alias']==home,'pts'] *= home_adj
+    team.loc[team['team_alias']==home,'ast'] *= home_adj
+    team.loc[team['team_alias']==home,'tov'] *= home_adj
+    team.loc[team['team_alias']==home,'orb'] *= home_adj
+    team.loc[team['team_alias']==home,'drb'] *= home_adj
+    team.loc[team['team_alias']==home,'stl'] *= home_adj
+    team.loc[team['team_alias']==home,'blk'] *= home_adj
+    team.loc[team['team_alias']==away,'pts'] *= away_adj
+    team.loc[team['team_alias']==away,'ast'] *= away_adj
+    team.loc[team['team_alias']==away,'tov'] *= away_adj
+    team.loc[team['team_alias']==away,'orb'] *= away_adj
+    team.loc[team['team_alias']==away,'drb'] *= away_adj
+    team.loc[team['team_alias']==away,'stl'] *= away_adj
+    team.loc[team['team_alias']==away,'blk'] *= away_adj
+    
+    team = team[['player_id', 'player_name', 'team_alias', 'injury', 'p_mp_48', 'pts', 'ast', 'tov', 'orb', 'drb', 'stl', 'blk']]
+    team['EV'] = team['pts'] + team['orb']+ team['drb']+ 2*team['ast']+ 3*team['blk']+ 3*team['stl']
+    print(home,round(team.loc[team['team_alias']==home,'pts'].sum(),2))
+    print(away,round(team.loc[team['team_alias']==away,'pts'].sum(),2))
+    return team
+
+#%% extract data from dunks and threes
 player_data = extract_epm_data()
 player_data = modify_strings(player_data)
 player_data = convert_string_list_to_dict(player_data)
 
-df = pd.DataFrame(player_data)
-df = df[['season', 'game_dt', 'player_id', 'player_name', 'team_id',
+injury_report = injury_status()
+injury_report[['Status', 'Type']] = injury_report['Status'].str.split('(', expand=True)
+injury_report['Type'] = injury_report['Type'].str.replace(")","")
+injury_report = injury_report[injury_report['Type']!='Rest']
+injury_report['injury'] = 0
+injury_report.loc[injury_report['Status']=='Day-To-Day ','injury'] = 0.75
+
+player_data = pd.DataFrame(player_data)
+player_data = player_data[['season', 'game_dt', 'player_id', 'player_name', 'team_id',
        'team_alias', 'age', 'inches', 'weight', 'rookie_year', 'position',
        'off', 'def', 'tot', 'p_pct_start', 'p_t_poss_48', 'p_mp_48', 'p_usg',
        'p_pts_100', 'p_tspct', 'p_efg', 'p_fga_rim_100', 'p_fga_mid_100',
@@ -112,7 +201,13 @@ df = df[['season', 'game_dt', 'player_id', 'player_name', 'team_id',
        'p_fg2pct', 'p_fg3pct', 'p_ftpct', 'p_ast_100', 'p_tov_100',
        'p_orb_100', 'p_drb_100', 'p_stl_100', 'p_blk_100']]
 
-df_adj = mins_adjustment(df.copy())
+#%% adjust player minutes to 240 per team
+df_adj = player_data.copy()
+df_adj = df_adj.merge(injury_report[['Player','injury']], left_on='player_name', right_on='Player', how='left')
+df_adj['injury'] = df_adj['injury'].fillna(1)
+df_adj['p_mp_48'] *= df_adj['injury']
+df_adj = mins_adjustment(df_adj)
+
 df_adj['adj_off'] = df_adj['off'] * df_adj['p_mp_48']/48
 df_adj['adj_def'] = df_adj['def'] * df_adj['p_mp_48']/48
 df_adj['adj_pace'] = df_adj['p_t_poss_48'] * df_adj['p_mp_48']/240
@@ -121,29 +216,5 @@ matchup = df_adj.pivot_table(values=['adj_off','adj_def','adj_pace'],index=['tea
 matchup['rating'] = matchup['adj_off'] + matchup['adj_def']
 matchup = matchup.reset_index()
 
-home = 'GSW'
-away = 'LAL'
-
-game_pace = (matchup.loc[matchup['team_alias']==home,'adj_pace'].values[0] * matchup.loc[matchup['team_alias']==away,'adj_pace'].values[0]) / matchup['adj_pace'].mean()
-bbref = pd.read_html('https://www.basketball-reference.com/leagues/NBA_stats_per_game.html')[0]
-bbref.columns = bbref.columns.droplevel(0)
-bbref = bbref[['Season','G','Pace']]
-bbref = bbref.dropna()
-bbref = bbref[bbref['Season'] != 'Season']
-bbref = bbref.apply(pd.to_numeric, errors='ignore')
-bbref['weight'] = np.exp(-bbref.index)
-bbref['weight'] *= bbref['G']
-
-team = df_adj.copy()
-team = team[team['team_alias']=='GSW']
-team['p_mp_48'] *= 240/team['p_mp_48'].sum()
-usage = (team['p_usg'] * team['p_mp_48']/48).sum()
-team['factor'] = (1/usage)
-team['pts'] = team['p_pts_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor']
-team['ast'] = team['p_ast_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor']
-team['tov'] = team['p_tov_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor']
-team['orb'] = team['p_orb_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor']
-team['drb'] = team['p_drb_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor']
-team['stl'] = team['p_stl_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor']
-team['blk'] = team['p_blk_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor']
-team = team[['player_id', 'player_name', 'team_alias', 'p_mp_48', 'pts', 'ast', 'tov', 'orb', 'drb', 'stl', 'blk']]
+#%% game level projections
+game_stats = matchup_stats('MIA', 'CHA', matchup, df_adj.copy())
