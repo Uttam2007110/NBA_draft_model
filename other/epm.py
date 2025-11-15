@@ -16,8 +16,8 @@ import ast
 
 pd.set_option('mode.chained_assignment', None)
 
-gw = 2
-gd = 0  #set this to 0 to get the whole game week
+gw = 4
+gd = 5  #set this to 0 to get the whole game week
 
 #%% functions
 def get_player_info():
@@ -168,7 +168,21 @@ def injury_status():
 def matchup_stats(home,away,matchup,team):
     print()
     game_pace = (matchup.loc[matchup['team_alias']==home,'adj_pace'].values[0] + matchup.loc[matchup['team_alias']==away,'adj_pace'].values[0]) / 2
-    game_pace *= (98.75/ matchup['adj_pace'].mean()) # 95 for the playoffs
+    """
+    playoffs = 0
+    league_avg_stats = pd.read_html('https://www.basketball-reference.com/leagues/NBA_stats_per_game.html')
+    if(playoffs == 1): c_season = league_avg_stats[1]
+    else: c_season = league_avg_stats[0]
+    c_season.columns = c_season.columns.droplevel(0)
+    c_season = c_season.dropna()
+    c_season = c_season.loc[c_season['Rk']!='Rk']
+    #c_season = c_season.apply(pd.to_numeric,errors='ignore') #deprecated
+    c_season = c_season.apply(lambda x: pd.to_numeric(x, errors='ignore'))
+    c_season['weight'] = np.exp(-c_season['Rk']) * c_season['G']
+    league_pace = sum(c_season['weight']*c_season['Pace'])/sum(c_season['weight'])
+    #league_avg_ortg = sum(c_season['weight']*c_season['ORtg'])/sum(c_season['weight'])
+    """
+    game_pace *= (99/ matchup['adj_pace'].mean()) # 99 for regular season, 95 for the playoffs
     
     home_pace_factor = game_pace/matchup.loc[matchup['team_alias']==home,'adj_pace'].values[0]
     away_pace_factor = game_pace/matchup.loc[matchup['team_alias']==away,'adj_pace'].values[0]
@@ -218,7 +232,7 @@ def matchup_stats(home,away,matchup,team):
     team['EV'] = team['pts'] + team['orb']+ team['drb']+ 2*team['ast']+ 3*team['blk']+ 3*team['stl']
     print(home,round(team.loc[team['team_alias']==home,'pts'].sum(),2))
     print(away,round(team.loc[team['team_alias']==away,'pts'].sum(),2))
-    return team
+    return team, [home,round(team.loc[team['team_alias']==home,'pts'].sum(),2),round(team.loc[team['team_alias']==away,'pts'].sum(),2),away]
 
 #%% player names
 player_names,team_id = get_player_info()
@@ -234,6 +248,8 @@ fixtures['event_name'] = fixtures['event_name'].str.replace('Gameweek ', 'GD_')
 fixtures['event_name'] = fixtures['event_name'].str.replace(" - Day ", "_") 
 fixtures[['event_name', 'gameweek','gameday']] = fixtures['event_name'].str.split('_', expand=True)
 
+#%% get the fixtures for the given gameweek
+#df_adj = player_data.copy()
 gw_fixtures = fixtures[(fixtures['gameweek']==str(gw))&(fixtures['is_home']==True)]
 gw_fixtures = gw_fixtures[['team_h', 'team_a', 'gameweek', 'gameday']]
 gw_fixtures = gw_fixtures.merge(team_id, left_on=['team_h'], right_on=['id'], how='left')
@@ -253,7 +269,7 @@ injury_report = injury_status()
 injury_report[['Status', 'Type']] = injury_report['Status'].str.split('(', expand=True)
 injury_report['Type'] = injury_report['Type'].str.replace(")","")
 injury_report = injury_report[injury_report['Type']!='Rest']
-injury_report['injury'] = 0
+injury_report['injury'] = 0.0
 injury_report.loc[injury_report['Status']=='Day-To-Day ','injury'] = 0.75
 
 player_data = pd.DataFrame(player_data)
@@ -265,30 +281,44 @@ player_data = player_data[['season', 'game_dt', 'player_id', 'player_name', 'tea
        'p_fg2pct', 'p_fg3pct', 'p_ftpct', 'p_ast_100', 'p_tov_100',
        'p_orb_100', 'p_drb_100', 'p_stl_100', 'p_blk_100']]
 
-#%% adjust player minutes to 240 per team
-df_adj = player_data.copy()
-df_adj = df_adj.merge(injury_report[['Player','injury']], left_on='player_name', right_on='Player', how='left')
-df_adj['injury'] = df_adj['injury'].fillna(1)
-df_adj['p_mp_48'] *= df_adj['injury']
-df_adj = mins_adjustment(df_adj)
+player_data['player_name'] = player_data['player_name'].str.replace('curiÅ¡ic','Durisic')
+player_data['player_name'] = player_data['player_name'].str.replace('Ä','c')
+player_data['player_name'] = player_data['player_name'].str.replace('','')
+player_data['player_name'] = player_data['player_name'].str.replace('Ä','c')
+player_data['player_name'] = player_data['player_name'].str.replace('Ã±','n')
+player_data['player_name'] = player_data['player_name'].str.replace('Ã¡','a')
+player_data['player_name'] = player_data['player_name'].str.replace('Ã¤','a')
+player_data['player_name'] = player_data['player_name'].str.replace('Ã´','o')
+player_data['player_name'] = player_data['player_name'].str.replace('Ã«','e')
 
-df_adj['adj_off'] = df_adj['off'] * df_adj['p_mp_48']/48
-df_adj['adj_def'] = df_adj['def'] * df_adj['p_mp_48']/48
-df_adj['adj_pace'] = df_adj['p_t_poss_48'] * df_adj['p_mp_48']/240
+#%% adjust player minutes to 240 per team    
+player_data = player_data.merge(injury_report[['Player','injury']], left_on='player_name', right_on='Player', how='left')
+player_data['injury'] = player_data['injury'].fillna(1)
+player_data['p_mp_48'] *= player_data['injury']
+player_data = mins_adjustment(player_data)
 
-matchup = df_adj.pivot_table(values=['adj_off','adj_def','adj_pace'],index=['team_alias'],aggfunc='sum')
-matchup['rating'] = matchup['adj_off'] + matchup['adj_def']
-matchup = matchup.reset_index()
+player_data['adj_off'] = player_data['off'] * player_data['p_mp_48']/48
+player_data['adj_def'] = player_data['def'] * player_data['p_mp_48']/48
+player_data['adj_pace'] = player_data['p_t_poss_48'] * player_data['p_mp_48']/240
+
+team_strength = player_data.pivot_table(values=['adj_off','adj_def','adj_pace'],index=['team_alias'],aggfunc='sum')
+team_strength['rating'] = team_strength['adj_off'] + team_strength['adj_def']
+team_strength = team_strength.reset_index()
 
 #%% game level projections
-#game_stats = matchup_stats('OKC', 'SAC', matchup, df_adj.copy())
-gw_summary = []
+#game_stats = matchup_stats('OKC', 'SAC', team_strength, df_adj.copy())
+gw_summary = []; results_summary = [['Home','home pts','away pts','Away']]
 for f in gw_fixtures.values:
-    game_stats = matchup_stats(f[6], f[9], matchup, df_adj.copy())
+    game_stats,result = matchup_stats(f[6], f[9], team_strength, player_data.copy())
     game_stats['week'] = f[2]
     game_stats['day'] = f[3]
     gw_summary.append(game_stats)
-del f
+    results_summary.append(result)
+del f, game_stats, result, gw_fixtures
+
+results_summary = pd.DataFrame(results_summary[1:], columns=results_summary[0])
+results_summary['spread'] = results_summary['home pts'] - results_summary['away pts']
+results_summary['total'] = results_summary['home pts'] + results_summary['away pts']
 
 gw_summary = pd.concat(gw_summary)
 gw_pivot = pd.pivot_table(gw_summary, index=['player_id','player_name'], columns=['day'], values=['EV'])
@@ -298,13 +328,14 @@ gw_pivot = gw_pivot.reset_index()
 gw_pivot = gw_pivot.sort_values(by='EV total', ascending=False)
 gw_pivot = gw_pivot.merge(player_names[['code','now_cost']], left_on=['player_id'], right_on=['code'], how='left')
 gw_pivot = gw_pivot.drop('code', axis=1)
-gw_pivot['efficiency'] = gw_pivot['EV total'] / gw_pivot['now_cost'] 
+gw_pivot['now_cost'] /= 10
+gw_pivot['efficiency'] = gw_pivot['EV total'] / gw_pivot['now_cost']
 
 print()
 print("the gw_summary and gw_pivot are the dataframes with the results")
 print()
 print("top 10 players for the chosen time frame are")
-print(gw_pivot[['player_name','EV total']].head(10))
+print(gw_pivot[['player_name','EV total','now_cost']].head(10))
 print()
 print("top 10 cost effective players for the chosen time frame are")
-print(gw_pivot.sort_values(by='efficiency', ascending=False).head(10)[['player_name','efficiency']].head(10))
+print(gw_pivot.sort_values(by='efficiency', ascending=False).head(10)[['player_name','efficiency','now_cost']].head(10))
