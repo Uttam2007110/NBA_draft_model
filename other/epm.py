@@ -13,10 +13,11 @@ from bs4 import BeautifulSoup
 import re
 import json
 import ast
+from scipy.stats import skellam
 
 pd.set_option('mode.chained_assignment', None)
 
-gw = 4
+gw = 5
 gd = 5  #set this to 0 to get the whole game week
 
 #%% functions
@@ -260,17 +261,18 @@ if(gd != 0):
 else:
     gw_fixtures = gw_fixtures
 
-#%% extract data from dunks and threes
-player_data = extract_epm_data()
-player_data = modify_strings(player_data)
-player_data = convert_string_list_to_dict(player_data)
-
+#%% get the latest injury report from yahoo
 injury_report = injury_status()
 injury_report[['Status', 'Type']] = injury_report['Status'].str.split('(', expand=True)
 injury_report['Type'] = injury_report['Type'].str.replace(")","")
 injury_report = injury_report[injury_report['Type']!='Rest']
 injury_report['injury'] = 0.0
-injury_report.loc[injury_report['Status']=='Day-To-Day ','injury'] = 0.75
+injury_report.loc[injury_report['Status']=='Day-To-Day ','injury'] = 0.9
+
+#%% extract data from dunks and threes
+player_data = extract_epm_data()
+player_data = modify_strings(player_data)
+player_data = convert_string_list_to_dict(player_data)
 
 player_data = pd.DataFrame(player_data)
 player_data = player_data[['season', 'game_dt', 'player_id', 'player_name', 'team_id',
@@ -281,7 +283,7 @@ player_data = player_data[['season', 'game_dt', 'player_id', 'player_name', 'tea
        'p_fg2pct', 'p_fg3pct', 'p_ftpct', 'p_ast_100', 'p_tov_100',
        'p_orb_100', 'p_drb_100', 'p_stl_100', 'p_blk_100']]
 
-player_data['player_name'] = player_data['player_name'].str.replace('curiÅ¡ic','Durisic')
+player_data.loc[player_data['player_id']==1642365,'player_name'] = 'Nikola Durisic'
 player_data['player_name'] = player_data['player_name'].str.replace('Ä','c')
 player_data['player_name'] = player_data['player_name'].str.replace('','')
 player_data['player_name'] = player_data['player_name'].str.replace('Ä','c')
@@ -304,6 +306,7 @@ player_data['adj_pace'] = player_data['p_t_poss_48'] * player_data['p_mp_48']/24
 team_strength = player_data.pivot_table(values=['adj_off','adj_def','adj_pace'],index=['team_alias'],aggfunc='sum')
 team_strength['rating'] = team_strength['adj_off'] + team_strength['adj_def']
 team_strength = team_strength.reset_index()
+team_strength = team_strength[['team_alias', 'adj_pace', 'adj_off', 'adj_def', 'rating']]
 
 #%% game level projections
 #game_stats = matchup_stats('OKC', 'SAC', team_strength, df_adj.copy())
@@ -319,6 +322,11 @@ del f, game_stats, result, gw_fixtures
 results_summary = pd.DataFrame(results_summary[1:], columns=results_summary[0])
 results_summary['spread'] = results_summary['home pts'] - results_summary['away pts']
 results_summary['total'] = results_summary['home pts'] + results_summary['away pts']
+results_summary['home win%'] = 1-skellam(mu1=results_summary['home pts'], mu2=results_summary['away pts']).cdf(0) + (skellam(mu1=results_summary['home pts'], mu2=results_summary['away pts']).pmf(0))/2
+results_summary['away win%'] = 1-skellam(mu1=results_summary['away pts'], mu2=results_summary['home pts']).cdf(0) + (skellam(mu1=results_summary['away pts'], mu2=results_summary['home pts']).pmf(0))/2
+results_summary['home win%'] = round(100*results_summary['home win%'],2)
+results_summary['away win%'] = round(100*results_summary['away win%'],2)
+results_summary = results_summary[['home pts','Home','home win%','away win%','Away','away pts']]
 
 gw_summary = pd.concat(gw_summary)
 gw_pivot = pd.pivot_table(gw_summary, index=['player_id','player_name'], columns=['day'], values=['EV'])
