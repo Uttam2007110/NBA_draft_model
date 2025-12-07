@@ -17,8 +17,8 @@ from scipy.stats import skellam
 
 pd.set_option('mode.chained_assignment', None)
 
-gw = 5
-gd = 5  #set this to 0 to get the whole game week
+gw = 7
+gd = 6  #set this to 0 to get the whole game week
 
 #%% functions
 def get_player_info():
@@ -184,6 +184,7 @@ def matchup_stats(home,away,matchup,team):
     #league_avg_ortg = sum(c_season['weight']*c_season['ORtg'])/sum(c_season['weight'])
     """
     game_pace *= (99/ matchup['adj_pace'].mean()) # 99 for regular season, 95 for the playoffs
+    league_avg_ortg = 115 # 115 regular season, 113 playoffs
     
     home_pace_factor = game_pace/matchup.loc[matchup['team_alias']==home,'adj_pace'].values[0]
     away_pace_factor = game_pace/matchup.loc[matchup['team_alias']==away,'adj_pace'].values[0]
@@ -194,23 +195,25 @@ def matchup_stats(home,away,matchup,team):
     team.loc[team['team_alias']==away,'pace factor'] = away_pace_factor
     
     home_usage = (team.loc[team['team_alias']==home,'p_usg'] * team.loc[team['team_alias']==home,'p_mp_48']/48).sum()
-    team.loc[team['team_alias']==home,'factor'] = (1/home_usage)
+    team.loc[team['team_alias']==home,'usage factor'] = (1/home_usage)
     away_usage = (team.loc[team['team_alias']==away,'p_usg'] * team.loc[team['team_alias']==away,'p_mp_48']/48).sum()
-    team.loc[team['team_alias']==away,'factor'] = (1/away_usage)
+    team.loc[team['team_alias']==away,'usage factor'] = (1/away_usage)
     
-    team['pts'] = team['p_pts_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
-    team['ast'] = team['p_ast_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
-    team['tov'] = team['p_tov_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
-    team['orb'] = team['p_orb_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
-    team['drb'] = team['p_drb_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
-    team['stl'] = team['p_stl_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
-    team['blk'] = team['p_blk_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['factor'] * team['pace factor']
+    team['pts'] = team['p_pts_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['usage factor'] * team['pace factor']
+    team['ast'] = team['p_ast_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['usage factor'] * team['pace factor']
+    team['tov'] = team['p_tov_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['usage factor'] * team['pace factor']
+    team['orb'] = team['p_orb_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['usage factor'] * team['pace factor']
+    team['drb'] = team['p_drb_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['usage factor'] * team['pace factor']
+    team['stl'] = team['p_stl_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['usage factor'] * team['pace factor']
+    team['blk'] = team['p_blk_100'] * (team['p_t_poss_48']/100) * (team['p_mp_48']/48) * team['usage factor'] * team['pace factor']
     
-    rating_adj = matchup.loc[matchup['team_alias']==home,'rating'].values[0] - matchup.loc[matchup['team_alias']==away,'rating'].values[0] + 2.5
+    rating_adj = 2.5 #+ matchup.loc[matchup['team_alias']==home,'rating'].values[0] - matchup.loc[matchup['team_alias']==away,'rating'].values[0]
     home_pts = team.loc[team['team_alias']==home,'pts'].sum()
+    exp_home_pts = ((league_avg_ortg + matchup.loc[matchup['team_alias']==home,'adj_off'].values[0] - matchup.loc[matchup['team_alias']==away,'adj_def'].values[0]) * (game_pace/100)) + rating_adj/2
     away_pts = team.loc[team['team_alias']==away,'pts'].sum()
-    home_adj = (home_pts + (rating_adj - (home_pts - away_pts))/2)/home_pts
-    away_adj = (away_pts - (rating_adj - (home_pts - away_pts))/2)/away_pts
+    exp_away_pts = ((league_avg_ortg + matchup.loc[matchup['team_alias']==away,'adj_off'].values[0] - matchup.loc[matchup['team_alias']==home,'adj_def'].values[0]) * (game_pace/100)) - rating_adj/2
+    home_adj = exp_home_pts/home_pts #(home_pts + (rating_adj - (home_pts - away_pts))/2)/home_pts
+    away_adj = exp_away_pts/away_pts #(away_pts - (rating_adj - (home_pts - away_pts))/2)/away_pts
     
     team.loc[team['team_alias']==home,'pts'] *= home_adj
     team.loc[team['team_alias']==home,'ast'] *= home_adj
@@ -296,6 +299,11 @@ player_data['player_name'] = player_data['player_name'].str.replace('Ã«','e')
 #%% adjust player minutes to 240 per team    
 player_data = player_data.merge(injury_report[['Player','injury']], left_on='player_name', right_on='Player', how='left')
 player_data['injury'] = player_data['injury'].fillna(1)
+
+#custom mins adjustments for players are being overprojected
+player_data.loc[player_data['player_id']==1641787,'injury'] = 0.25 #Tosan Evbuomwan
+player_data.loc[player_data['player_id']==1631131,'injury'] = 0.25 #Oscar Tshiebwe
+
 player_data['p_mp_48'] *= player_data['injury']
 player_data = mins_adjustment(player_data)
 
