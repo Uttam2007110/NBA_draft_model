@@ -14,11 +14,18 @@ import re
 import json
 import ast
 from scipy.stats import skellam
+from scipy.stats import skewnorm
+from scipy.optimize import brentq
+from scipy.optimize import fsolve
+
+import matplotlib.pyplot as plt
 
 pd.set_option('mode.chained_assignment', None)
 
-gw = 7
-gd = 6  #set this to 0 to get the whole game week
+gw = 15
+gd = 5  #set this to 0 to get the whole game week
+
+#skewed_pdf('Paul George','pts', 3.5, gw_summary.copy())
 
 #%% functions
 def get_player_info():
@@ -238,6 +245,81 @@ def matchup_stats(home,away,matchup,team):
     print(away,round(team.loc[team['team_alias']==away,'pts'].sum(),2))
     return team, [home,round(team.loc[team['team_alias']==home,'pts'].sum(),2),round(team.loc[team['team_alias']==away,'pts'].sum(),2),away]
 
+def stdev_skew(df):
+    df['ast_stdev'] = df['ast'] * ((0.062*(1-df['p_mp_48']/60)/(df['p_mp_48']/60)) + 0.7)
+    df['ast_skew'] = df['ast'] * ((0.506*(1-df['p_mp_48']/60)/(-0.01 + df['p_mp_48']/60)) - 0.1)
+    df['pts_stdev'] = df['pts'] * ((0.047*(1-df['p_mp_48']/60)/(df['p_mp_48']/60)) + 0.4)
+    df['pts_skew'] = df['pts'] * ((0.074*(1-df['p_mp_48']/60)/(-0.011 + df['p_mp_48']/60)) - 0.02)
+    df['reb_stdev'] = (df['orb']+df['drb']) * ((0.035*(1-df['p_mp_48']/60)/(df['p_mp_48']/60)) + 0.57)
+    df['reb_skew'] = (df['orb']+df['drb']) * ((0.115*(1-df['p_mp_48']/60)/(-0.01 + df['p_mp_48']/60)) + 0.1)
+    
+    return df
+
+def get_a_from_skew(target_skew):
+    # The skewness is defined for a in range (-infinity, +infinity),
+    # but the function is symmetric, so we can solve for positive a
+    # and map the sign.
+    
+    # Define a function: f(a) = skewnorm_skew(a) - target_skew
+    def f(a): return skewnorm.stats(a, moments='s') - target_skew
+    
+    # Use a large range to find the root
+    a_solution = brentq(f, -100, 100)
+    return a_solution
+
+def fleishman_coeffs(skew, kurt):
+    def equations(vars):
+        a, b, c, d = vars
+        eq1 = b**2 + 6*b*d + 2*c**2 + 15*d**2 - 1
+        eq2 = 2*c*(b**2 + 24*b*d + 105*d**2 + 2) - skew
+        eq3 = b**4 + 24*b**3*d + 144*b**2*d**2 + 12*b**2*c**2 + 720*b*d**3 + 120*b*c**2*d + 36*c**4 + 1680*d**4 + 12*c**2 + 3 - kurt
+        eq4 = a
+        return [eq1, eq2, eq3, eq4]
+
+    initial_guess = [0.01, 0.33, 0.33, 0.33]
+    a, b, c, d = fsolve(equations, initial_guess)
+    #print(a, b, c, d)
+    return a, b, c, d
+
+def generate_fleishman_distribution(n_samples, mean, std, skew, kurt):
+    a, b, c, d = fleishman_coeffs(skew, kurt)
+    z = np.random.normal(0, 1, n_samples)
+    x = a + b*z + c*z**2 + d*z**3
+    x = mean + x*std
+    return x
+
+def skewed_pdf(player,stat,target_val,df):
+    df = stdev_skew(df)
+    
+    df['reb'] = df['orb'] + df['drb']
+    mean = df.loc[df['player_name']==player,stat].values[0]
+    stdev = df.loc[df['player_name']==player,f'{stat}_stdev'].values[0]
+    skew = df.loc[df['player_name']==player,f'{stat}_skew'].values[0]
+    
+    #ff = fleishman(mean=mean, var=stdev**2, skew=skew, ekurt=3, size=1000)
+    #samples = ff.gen_field()
+    #samples = skewnorm.rvs(a=skew, loc=mean, scale=stdev, size=1000)
+    samples = generate_fleishman_distribution(100000, mean, stdev, skew, 3)
+    
+    count = sum(i > target_val for i in samples)
+    probability = count/len(samples) #skewnorm.sf(target_val, a=0, loc=mean, scale=stdev)
+    print(player)
+    print(f"probability of {stat} over {target_val} is",round(probability,3))
+    print(f"probability of {stat} under {target_val} is",round(1-probability,3))
+    """
+    x_values = np.linspace(0, 70, 200)
+    pdf_values = skewnorm.pdf(x_values, 0, loc=mean, scale=stdev)
+    
+    plt.figure(figsize=(8, 5))
+    plt.plot(x_values, pdf_values, label=f'Skew Normal CDF')
+    plt.xlabel('X value')
+    plt.ylabel('Cumulative Probability')
+    plt.title('Cumulative Distribution Function of a Skewed Normal Distribution')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+    """    
+
 #%% player names
 player_names,team_id = get_player_info()
 player_names = player_names.loc[player_names['code']>1]
@@ -303,6 +385,11 @@ player_data['injury'] = player_data['injury'].fillna(1)
 #custom mins adjustments for players are being overprojected
 player_data.loc[player_data['player_id']==1641787,'injury'] = 0.25 #Tosan Evbuomwan
 player_data.loc[player_data['player_id']==1631131,'injury'] = 0.25 #Oscar Tshiebwe
+player_data.loc[player_data['player_id']==1642013,'injury'] = 0.25 #Malik Williams
+player_data.loc[player_data['player_id']==1642402,'injury'] = 0.25 #Enrique Freeman
+player_data.loc[player_data['player_id']==1626156,'injury'] = 0.25 #D'Angelo Russell
+player_data.loc[player_data['player_id']==1641998,'injury'] = 0.25 #Trey Jemison
+player_data.loc[player_data['player_id']==1642050,'injury'] = 0.25 #Jackson Rowe
 
 player_data['p_mp_48'] *= player_data['injury']
 player_data = mins_adjustment(player_data)
