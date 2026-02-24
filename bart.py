@@ -28,14 +28,16 @@ from matplotlib.ticker import PercentFormatter
 
 from numba import njit
 import requests
+from datetime import datetime
 
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
-from pandas.errors import SettingWithCopyWarning
-warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
+#from pandas.errors import SettingWithCopyWarning
+#warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
+pd.set_option('mode.chained_assignment', None)
 
-#path = "C:/Users/GF63/Desktop/cricket/excel/bart"
-path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
+path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 latest_season = 2026
 
@@ -166,12 +168,12 @@ def bpm_estimate(df):
 
 def height_estimate(df):
     df['hgt'] = +74.0115813626499 + \
-                +0.0242139494814847 * df['TS%'] + \
-                +0.154491122634659  * df['ORB%'] + \
-                +0.17303148969203   * df['DRB%'] + \
-                -0.151160612178076  * df['AST%'] + \
-                +0.343528125104708  * df['BLK%'] + \
-                -0.952915225005203  * df['3par']
+                +0.02421394948148  * df['TS%']  + \
+                +0.15449112263466  * df['ORB%'] + \
+                +0.17303148969203  * df['DRB%'] + \
+                -0.15116061217808  * df['AST%'] + \
+                +0.34352812510471  * df['BLK%'] + \
+                -0.95291522500520  * df['3par']
     return df
 
 def extract_player_stats():
@@ -201,7 +203,7 @@ def extract_player_stats():
             team_bs = team_bs.reset_index()
             data = data.merge(team_bs, left_on='team', right_on='team')
             
-            data = data.loc[(data['mp']>=10) & (data['GP']>=10)]
+            data = data.loc[(data['mp']>=2) & (data['GP']>=2)] #10, 10 is the default filter
             data['blk_share'] = (data['blk']*40/data['mp'])/data['blocks_y']
             data['stl_share'] = (data['stl']*40/data['mp'])/data['steals_y']
             #data = df_class(data)
@@ -237,6 +239,9 @@ def extract_player_stats():
         data_adj.loc[data_adj['2P%']<0,'2P%'] = 0
         data_adj.loc[data_adj['3P%']>1,'3P%'] = 1
         data_adj.loc[data_adj['3P%']<0,'3P%'] = 0
+        data_adj['3par'] = data_adj['3par'].fillna(0)
+        data_adj['ftr'] = data_adj['ftr'].clip(upper=1)
+        
         data_adj['3prof'] = data_adj['3P%']*(2/(1+np.exp(-4*data_adj['3par']))-1)
         unadj_p_stats.append(data_adj.copy())
         
@@ -283,6 +288,7 @@ del player_stats['pid2']; del mapping
 
 #other corrections
 player_stats.loc[((player_stats['pid']==50678)&(player_stats['season']==2018)),'player'] = 'Ja Morant'
+player_stats.loc[(player_stats['pid']==-183444),'player'] = 'Johann Grünloh'
 
 player_stats.loc[((player_stats['player']=='Dame Sarr')&(player_stats['pid']==-190807)),'pid'] = 133946
 player_stats.loc[((player_stats['player']=='Hannes Steinbach')&(player_stats['pid']==-218597)),'pid'] = 135114
@@ -291,6 +297,7 @@ player_stats.loc[((player_stats['player']=='Neoklis Avdalas')&(player_stats['pid
 player_stats.loc[((player_stats['player']=='Tomislav Ivisic')&(player_stats['pid']==-139509)),'pid'] = 127979
 player_stats.loc[((player_stats['player']=='Zvonimir Ivisic')&(player_stats['pid']==-139511)),'pid'] = 78304
 player_stats.loc[((player_stats['player']=='David Mirkovic')&(player_stats['pid']==-188962)),'pid'] = 135431
+player_stats.loc[((player_stats['player']=='Johann Grünloh')&(player_stats['pid']==-183444)),'pid'] = 135586
 
 #%% aggregate weighted career level data instead of single season (not implemented yet)
 def pivot_data(df,df2):
@@ -315,15 +322,10 @@ def pivot_data(df,df2):
 
 #career_stats = pivot_data(player_stats.copy(),data.copy())
 
-#%% histogram of all player stats
-data.hist(figsize=(10, 8))  # Adjust figsize as needed
-plt.tight_layout() # Adjust layout to prevent overlap
-plt.show()
-
 #%% correlation matrix for all the stats under consideration
 data = data[['class','hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'BLK%','blk_share','STL%','stl_share', 'ftr','FT%', 
-             #'dunkar', 'rimar', 'rim%', 'midar', 'mid%', '3prof', 'age', '2P%',
-             '3par', '3P%','ORtg','drtg','bpm','mp','adj_rating']]
+             #'dunkar', 'rimar', 'rim%', 'midar', 'mid%', '3prof', 'age', 
+             'TS%', '3par', '3prof','bpm','ORtg','drtg','mp','adj_rating']] #3P%, bpm
 
 data = data_imputation_08_09(data.copy())
 correlation_matrix = data.corr()
@@ -336,6 +338,11 @@ year_pivot = pd.pivot_table(player_stats,values=['class','hgt', 'GP', 'mp', 'usg
                                                  'BLK%', 'STL%', 'ftr','FT%', 'dunkar', 'rimar', 'rim%', 'midar', 'mid%', '3par', 
                                                  '3P%','ORtg', 'drtg','bpm'],index=['season'],aggfunc='mean')
 """
+
+#%% histogram of all player stats
+data.hist(figsize=(10, 8))  # Adjust figsize as needed
+plt.tight_layout() # Adjust layout to prevent overlap
+plt.show()
 
 #%% mahlanobis distance based player comps
 def distance(name, yr, full_matrix, data_copy, print_df):
@@ -569,8 +576,20 @@ def age_curve_adj(stats,c_s):
 
     return combinations
 
+def outcomes(df):
+    #nba_stats = extract_nba_stats(season)
+    player_peaks = df.groupby('pid')[['o_dpm','d_dpm']].agg(lambda x: x.nlargest(5).mean())
+    player_peaks = player_peaks.reset_index()
+    player_bio = df.pivot_table(index='pid',values=['player_name','season_x'],aggfunc='first')
+    player_bio = player_bio.reset_index()
+    player_outcomes = player_bio.merge(player_peaks, on='pid', how='left')
+    player_outcomes['dpm'] = player_outcomes['o_dpm'] + player_outcomes['d_dpm']
+    player_outcomes['season_x'] -= 1
+    return player_outcomes
+
 #%% get latest nba stats
 nba_stats = extract_nba_stats(latest_season)
+#draft_outcomes = outcomes(nba_stats)
 
 #%% random forest based model
 def regression_draft_model(league_stats, pre_nba_data, train_season_end):
@@ -681,9 +700,9 @@ def clustering(start_season,end_season):
     
     centroids = pd.read_excel(f'{path}/results.xlsx','centroids')
     centroids.drop(columns=['cluster'], inplace=True)
-    centroids = centroids[['bust','rotation','starter','all star','all nba']]
+    centroids = centroids[['floor','median','ceil']]
     
-    distances = cdist(df_all[['bust','rotation','starter','all star','all nba']], centroids, metric='euclidean')
+    distances = cdist(df_all[['floor','median','ceil']], centroids, metric='euclidean')
     cluster_assignments = np.argmin(distances, axis=1)
     df_all['cluster'] = cluster_assignments + 1
     
@@ -782,7 +801,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
         """
         
         #comps_list = off_comps['o_dpm'].to_list() + [-3.5] * (len(dist)-nba_comps) #-3.5
-        comps_list = off_comps.to_list() + [-3.5] * (len(dist)-nba_comps) #-3.5
+        comps_list = off_comps.to_list() + [-2.5] * (len(dist)-nba_comps) #-3.5
         comps_list.sort()
         skewness_off = skew(comps_list) #weighted_skew(dist_comps['o_dpm'],dist_comps['score'])
         kurtosis_off = scipy.stats.kurtosis(comps_list) #weighted_kurtosis(dist_comps['o_dpm'],dist_comps['score'])
@@ -790,7 +809,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
         variance_off = np.var(comps_list) #weighted_variance(dist_comps['o_dpm'],dist_comps['score'])
         
         #comps_list = def_comps['d_dpm'].to_list() + [-2] * (len(dist)-nba_comps) #-2
-        comps_list = def_comps.to_list() + [-2] * (len(dist)-nba_comps) #-2
+        comps_list = def_comps.to_list() + [-1.5] * (len(dist)-nba_comps) #-2
         comps_list.sort()
         skewness = skew(comps_list) #weighted_skew(dist_comps['d_dpm'],dist_comps['score'])
         kurtosis = scipy.stats.kurtosis(comps_list) #weighted_kurtosis(dist_comps['d_dpm'],dist_comps['score'])
@@ -805,15 +824,15 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
             comps_num = len(dist)
             #bpm_gap = stats.percentileofscore(dist['bpm'].to_list(), bpm)
             
-            bench = np.sum(np.array(distribution) >= -2)/(samples*samples) #0, -1.75
-            starter = np.sum(np.array(distribution) >= -1)/(samples*samples) #1, -0.25
-            allstar = np.sum(np.array(distribution) >= 0.8)/(samples*samples) #2.5, 0.75
-            allnba = np.sum(np.array(distribution) >= 2.75)/(samples*samples) #4, 1.5
+            bench = np.sum(np.array(distribution) >= -1.5)/(samples*samples) #0, -1.75
+            starter = np.sum(np.array(distribution) >= -0.5)/(samples*samples) #1, -0.25
+            allstar = np.sum(np.array(distribution) >= 1)/(samples*samples) #2.5, 0.75
+            allnba = np.sum(np.array(distribution) >= 2)/(samples*samples) #4, 1.5
             mvp = np.sum(np.array(distribution) >= 5.5)/(samples*samples) #7.5, 3.75
             
-            p_25 = round(np.percentile(distribution, 25),1) #4
-            p_50 = round(np.percentile(distribution, 50),1) #4
-            p_90 = round(np.percentile(distribution, 90),1) #4
+            p_25 = round(np.percentile(distribution, 50),1) #4
+            p_50 = round(np.percentile(distribution, 75),1) #4
+            p_90 = round(np.percentile(distribution, 95),1) #4
             
             dist2 = league_stats[league_stats['pid'].isin(dist['pid'])]
             #new line
@@ -855,7 +874,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
             #dist = johnsonsu(a, b, loc=loc, scale=scale)
 
             # Best-fit curve
-            plt.xlim(-5.5, 10)
+            plt.xlim(-4, 8)
             #xmin, xmax = plt.xlim()
             #x2 = np.linspace(xmin, xmax, 100)
             #pdf = dist.pdf(x2)
@@ -871,7 +890,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
             print()
             print(x,round(p_age,2))
             print(team,year)
-            print('BPM',bpm)
+            print('BPM',round(bpm,2))
             print()
             print("Bust rate",round(1-bench,4))
             print("Rotation Rate",round(bench-starter,4))
@@ -912,60 +931,90 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
             return dist
         else:
             p_mins = p_mp * min(p_gp,40)
-            p_weight = np.tanh(p_mins * np.log(p_class+1)/3200) * 1000
+            p_weight = np.tanh(p_mins * np.log(p_class+1)/800) * 1000
             p_weight = np.ceil(p_weight).astype(int)
-            print(x,year,p_weight)
             
             distribution_off = generate_fleishman_distribution(p_weight, mean_off, variance_off**0.5, skewness_off, kurtosis_off)            
             distribution_def = generate_fleishman_distribution(p_weight, mean, variance**0.5, skewness, kurtosis)
             distribution = sum_of_unique_combinations(distribution_off,distribution_def)
             
+            p_25 = round(np.percentile(distribution, 50),1) #4
+            p_50 = round(np.percentile(distribution, 75),1) #4
+            p_90 = round(np.percentile(distribution, 95),1) #4
+            print(x,year,p_25,p_50,p_90,p_weight)
+            
             return [x, pid, team, p_class, p_age, year, p_weight, distribution]
         
     except:
         print(f"*******error with {x} {year}*******")
-        if(print_val == 0): return [x, 0,"NA", 0, year, 0, []]        
+        if(print_val == 0): return [x, 0,"NA", 0, 0, year, 0, []]        
     
 def calculate_percentile(data_list, percentile): return np.percentile(data_list, percentile)
 
 def mdist_list(year, p_stats, print_val, get_seniors_stats):
+    start_time = datetime.now()
     nba_stats_year = extract_nba_stats(year)
-    #list_p = pd.read_excel(f'{path}/nba_stats.xlsx',f'{year}')
-    list_p = pd.read_excel(f'{path}/nba_stats.xlsx','draft list')[f'{year}']
-    #names_list = list_p['Player'].dropna().to_list()
-    names_list = list(set(list_p))
-    #names_list.sort()
-    try: withdrawn_list = list_p['Withdrawn'].dropna().to_list()
-    except KeyError: withdrawn_list = []
     
     if(get_seniors_stats == 1):
-        seniors = p_stats[(p_stats['season']==year)&(p_stats['class']==4)&(p_stats['bpm']>=7)]
-        seniors = [x for x in seniors['player'].to_list() if x not in withdrawn_list]
-        names_list = names_list + seniors
+        p_stats['adj_rating'] = data['adj_rating']
+        seniors = p_stats[(p_stats['adj_rating']>=0.2)&(p_stats['season']==year)&(p_stats['mp']>=15)&(((p_stats['bpm']>=0) & (p_stats['class']<=1))|((p_stats['bpm']>=3.5) & (p_stats['class']>1)))]
+        seniors = seniors['pid'].to_list()
+        names_list = seniors
+        p_stats = p_stats.drop(columns=['adj_rating'])
+    else:
+        list_p = pd.read_excel(f'{path}/nba_stats.xlsx','draft list')[f'{year}']
+        list_p = list_p.dropna()
+        df_p = p_stats[p_stats['player'].isin(list_p)]
+        #names_list = list_p['Player'].dropna().to_list()
+        names_list = df_p['pid'].to_list()
+        names_list = list(set(names_list))
     
-    exceptions = list(set(names_list)-set(p_stats.player))
-    print("names not in player data")
-    print(exceptions)
+    names_list.sort()
+    #exceptions = list(set(names_list)-set(p_stats.player))
+    #print("names not in player data")
+    #print(exceptions)
     print()
     
-    names_list = p_stats[p_stats['player'].isin(names_list)]
-    names_list = names_list.loc[(names_list['season']<=year)&(names_list['season']>year-5)&(names_list['class']>0)]
-    
-    result = [['player','pid','team','class','age','season','weight','distribution']]    
+    #result = [['player','pid','team','class','age','season','weight','distribution']]
+    result = [['player','team','class','age','season','rotation','starter','all star','all nba','mvp','floor','median','ceil']]
     if(print_val==0): p_stats = p_stats[(p_stats['season']<=year)]
-    for x,y in names_list[['player','season']].values:
-        result.append(player_comp_analysis(x,y,p_stats,nba_stats_year.copy(),print_val))
+    
+    for p in names_list:#[['player','season']].values:
+        df_name = p_stats[(p_stats['pid']==p)&(p_stats['season']<=year)]
+        player_list = []; full_dist=[]; pteam = ''
+        for x,y in df_name[['player','season']].values:
+            player_list = player_comp_analysis(x,y,p_stats,nba_stats_year.copy(),print_val)
+            pteam = player_list[2] #+ ', ' + pteam 
+            pclass = player_list[3]
+            page = player_list[4]
+            pseason = player_list[5]
+            full_dist = full_dist + player_list[7]
+            
+        len_dist = len(full_dist)
+        #print(full_dist)
+        try:
+            pbench = np.sum(np.array(full_dist) >= -1.5)/(len_dist) #0, -1.75
+            pstarter = np.sum(np.array(full_dist) >= -0.5)/(len_dist) #1, -0.25
+            pallstar = np.sum(np.array(full_dist) >= 1)/(len_dist) #2.5, 0.75
+            pallnba = np.sum(np.array(full_dist) >= 2)/(len_dist) #4, 1.5
+            pmvp = np.sum(np.array(full_dist) >= 5.5)/(len_dist) #7.5, 3.75
+            p_25 = round(np.percentile(full_dist, 50),1) #4
+            p_50 = round(np.percentile(full_dist, 75),1) #4
+            p_90 = round(np.percentile(full_dist, 95),1) #4
+            
+            result.append([x,pteam,pclass,page,pseason,pbench,pstarter,pallstar,pallnba,pmvp,p_25,p_50,p_90])
+        except IndexError:
+            result
+        #result.append(player_comp_analysis(x,y,p_stats,nba_stats_year.copy(),print_val))
     
     result = pd.DataFrame(result)
     result.columns = result.iloc[0];result = result.drop(0)
     result = result.apply(pd.to_numeric, errors='ignore')
-    #result = result.sort_values(by=['ceil','floor','player'], ascending=[False,False,True])
     result = result[result['class']>0]
     #result['weight'] = result['mins'] * np.exp(-np.power((result['age']-21.3)/2,2))
     #result['weight'] = result['mins'] * (result['class'])
-    
-    print()
-    print("player data collected, probabilities being calculated")
+    """
+    print("aggregation done, probabilities being calculated")
     pivot = result.pivot_table(values=['distribution'], index=['player','pid'], 
                                #aggfunc = lambda rows: np.average(rows, weights = result.loc[rows.index, 'class']))
                                #aggfunc = lambda rows: np.average(rows, weights = result.loc[rows.index, 'weight']))
@@ -980,25 +1029,27 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
     pivot = team.merge(pivot, left_on=['player','pid'], right_on=['player','pid'])
     pivot = pivot.merge(age, left_on=['player','pid'], right_on=['player','pid'])
     pivot['season'] = year
-    pivot['size'] = pivot['distribution'].apply(lambda lst: len(lst))
-    #print(pivot['size'])
+    pivot['sample size'] = pivot['distribution'].apply(lambda lst: len(lst))
+    pivot['sample size'] = np.sqrt(pivot['distribution'])
+    #print(pivot['sample size'])
     
-    pivot['rotation'] = pivot['distribution'].apply(lambda lst: len([x for x in lst if x > -2])/len(lst))
-    pivot['starter'] = pivot['distribution'].apply(lambda lst: len([x for x in lst if x > -1])/len(lst))
+    pivot['rotation'] = pivot['distribution'].apply(lambda lst: len([x for x in lst if x > -1.5])/len(lst))
+    pivot['starter'] = pivot['distribution'].apply(lambda lst: len([x for x in lst if x > -0.5])/len(lst))
     pivot['all star'] = pivot['distribution'].apply(lambda lst: len([x for x in lst if x > 1])/len(lst))
-    pivot['all nba'] = pivot['distribution'].apply(lambda lst: len([x for x in lst if x > 2.5])/len(lst))
-    pivot['mvp'] = pivot['distribution'].apply(lambda lst: len([x for x in lst if x > 6])/len(lst))
+    pivot['all nba'] = pivot['distribution'].apply(lambda lst: len([x for x in lst if x > 2])/len(lst))
+    pivot['mvp'] = pivot['distribution'].apply(lambda lst: len([x for x in lst if x > 5.5])/len(lst))
     pivot['floor'] = pivot['distribution'].apply(lambda x: calculate_percentile(x, 50))
     pivot['median'] = pivot['distribution'].apply(lambda x: calculate_percentile(x, 75))
-    pivot['ceil'] = pivot['distribution'].apply(lambda x: calculate_percentile(x, 90))
-    
+    pivot['ceil'] = pivot['distribution'].apply(lambda x: calculate_percentile(x, 95))
+    """
+    pivot = result.copy()
     print()
     print("rotation caliber players",round(pivot['rotation'].sum(),2))
     print("starter caliber players",round(pivot['starter'].sum(),2))
     print("all star caliber players",round(pivot['all star'].sum(),2))
     print("all nba caliber players",round(pivot['all nba'].sum(),2))
     print("mvp claiber players",round(pivot['mvp'].sum(),2))
-    
+    print()
     pivot['bust'] = 1 - pivot['rotation']
     pivot['rotation'] = pivot['rotation'] - pivot['starter']
     pivot['starter'] = pivot['starter'] - pivot['all star']
@@ -1014,14 +1065,16 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
     pivot['all star'] = round(pivot['all star'],5)
     pivot['all nba'] = round(pivot['all nba'],5)
     pivot['mvp'] = round(pivot['mvp'],5)
-    
     pivot = pivot[['player','team','age','season','bust','rotation','starter','all star','all nba','mvp','floor','median','ceil']]
-    return pivot,exceptions 
+    
+    pivot = pivot[pivot['bust']<=0.97]
+    print("total minutes for run",round((datetime.now()-start_time).total_seconds()/60,2))
+    return pivot 
 
 #%% call the player comparision function
 
-#pcomps = player_comp_analysis("Jayden Quaintance", 2025, player_stats.copy(), nba_stats.copy(), 1)
+#pcomps = player_comp_analysis("Michael Porter Jr.", 2018, player_stats.copy(), nba_stats.copy(), 1)
 
-draft_list,exception_list = mdist_list(2026, player_stats.copy(),0,0)
+draft_list = mdist_list(2013, player_stats.copy(),0,1)
 
-#clustered_list = clustering(2016,2025)
+#clustered_list = clustering(2016,2026)
