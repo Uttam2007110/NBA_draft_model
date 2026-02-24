@@ -32,12 +32,12 @@ from datetime import datetime
 
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
-#from pandas.errors import SettingWithCopyWarning
-#warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
+from pandas.errors import SettingWithCopyWarning
+warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 pd.set_option('mode.chained_assignment', None)
 
-path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
-#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
+#path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 latest_season = 2026
 
@@ -323,7 +323,7 @@ def pivot_data(df,df2):
 #career_stats = pivot_data(player_stats.copy(),data.copy())
 
 #%% correlation matrix for all the stats under consideration
-data = data[['class','hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'BLK%','blk_share','STL%','stl_share', 'ftr','FT%', 
+data = data[['age','class','hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'BLK%','blk_share','STL%','stl_share', 'ftr','FT%', 
              #'dunkar', 'rimar', 'rim%', 'midar', 'mid%', '3prof', 'age', 
              'TS%', '3par', '3prof','bpm','ORtg','drtg','mp','adj_rating']] #3P%, bpm
 
@@ -662,7 +662,7 @@ def regression_draft_model(league_stats, pre_nba_data, train_season_end):
 #train,test = regression_draft_model(nba_stats.copy(),data.copy(),2020)
     
 #%% individual player comps analysis
-def fleishman_coeffs(skew, kurt):
+def fleishman_coeffs(mean, std, skew, kurt):
     def equations(vars):
         a, b, c, d = vars
         eq1 = b**2 + 6*b*d + 2*c**2 + 15*d**2 - 1
@@ -671,15 +671,20 @@ def fleishman_coeffs(skew, kurt):
         eq4 = a
         return [eq1, eq2, eq3, eq4]
 
-    #initial_guess = [0.25, 0.25, 0.25, 0.25]
     initial_guess = [0, 0, 1, 0]
-    #initial_guess = [0, 1, 0, 0]
+    """
+    c_guess = 0.10007 * skew + 0.00844 * pow(skew,3)
+    d_guess = 0.95357 - 0.05679 * kurt + 0.0352 * skew + 0.00133 * pow(skew,2)
+    b_guess = 0.30978 - 0.31655 * d_guess
+    a_guess = mean - c_guess * pow(std,2)
+    initial_guess = [a_guess,b_guess,c_guess,d_guess]
+    """
     a, b, c, d = fsolve(equations, initial_guess)
     #print(a, b, c, d)
     return a, b, c, d
 
 def generate_fleishman_distribution(n_samples, mean, std, skew, kurt):
-    a, b, c, d = fleishman_coeffs(skew, kurt)
+    a, b, c, d = fleishman_coeffs(mean, std, skew, kurt)
     z = np.random.normal(0, 1, n_samples)
     x = a + b*z + c*z**2 + d*z**3
     x = mean + x*std
@@ -928,6 +933,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
             def_comps = def_comps.reset_index()
             dist = dist.merge(def_comps, left_on=['pid'], right_on=['pid'], how='left')
             dist = dist[['pid','player', 'team', 'season', 'hgt', 'bpm', 'mdist', 'o_dpm', 'd_dpm']]
+            dist['dpm'] = dist['o_dpm'] + dist['d_dpm']
             return dist
         else:
             p_mins = p_mp * min(p_gp,40)
@@ -935,9 +941,9 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
             p_weight = np.ceil(p_weight).astype(int)
             
             distribution_off = generate_fleishman_distribution(p_weight, mean_off, variance_off**0.5, skewness_off, kurtosis_off)            
-            distribution_def = generate_fleishman_distribution(p_weight, mean, variance**0.5, skewness, kurtosis)
+            distribution_def = generate_fleishman_distribution(p_weight, mean, variance**0.5, skewness, kurtosis)            
             distribution = sum_of_unique_combinations(distribution_off,distribution_def)
-            
+                        
             p_25 = round(np.percentile(distribution, 50),1) #4
             p_50 = round(np.percentile(distribution, 75),1) #4
             p_90 = round(np.percentile(distribution, 95),1) #4
@@ -1073,8 +1079,8 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
 
 #%% call the player comparision function
 
-#pcomps = player_comp_analysis("Michael Porter Jr.", 2018, player_stats.copy(), nba_stats.copy(), 1)
+#pcomps = player_comp_analysis("Kon Knueppel", 2025, player_stats.copy(), nba_stats.copy(), 1)
 
-draft_list = mdist_list(2013, player_stats.copy(),0,1)
+draft_list = mdist_list(2026, player_stats.copy(),0,1)
 
 #clustered_list = clustering(2016,2026)
