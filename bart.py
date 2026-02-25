@@ -304,8 +304,9 @@ def pivot_data(df,df2):
     mapping = {0:5, 1:5, 2:3, 3:1.5, 4:0.5}
     df['weight'] = df['class'].map(mapping)
     df['weight'] *= df['mp'] * df['GP']
-    pivot = df.pivot_table(values=['age', 'hgt', 'mp', 'usg', 'TS%', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'BLK%', 'blk_share','STL%',
-                                   'stl_share', 'pfr', 'ftr', 'FT%', 'dunkar', 'rimar', 'rim%','midar', 'mid%', '3par', '3P%','ORtg', 'drtg', 'bpm'],
+    pivot = df.pivot_table(values=['age', 'hgt', 'mp', 'usg', 'TS%', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 
+                                   'BLK%', 'blk_share','STL%', 'stl_share', 'pfr', 'ftr', 'FT%',
+                                   'dunkar', 'rimar', 'rim%','midar', 'mid%', '3par', '3P%','ORtg', 'drtg', 'bpm'],
                               index=['player','pid'], 
                               aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'weight']))
 
@@ -323,9 +324,10 @@ def pivot_data(df,df2):
 #career_stats = pivot_data(player_stats.copy(),data.copy())
 
 #%% correlation matrix for all the stats under consideration
-data = data[['age','class','hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'BLK%','blk_share','STL%','stl_share', 'ftr','FT%', 
-             #'dunkar', 'rimar', 'rim%', 'midar', 'mid%', '3prof', 'age', 
-             'TS%', '3par', '3prof','bpm','ORtg','drtg','mp','adj_rating']] #3P%, bpm
+data = data[['age','class','hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 
+             'BLK%','blk_share','STL%','stl_share', 'ftr','FT%', 'TS%', '3par', '3prof',
+             #'dunkar', 'rimar', 'rim%', 'midar', 'mid%',
+             'bpm','ORtg','drtg','mp','adj_rating']] #3P%, bpm
 
 data = data_imputation_08_09(data.copy())
 correlation_matrix = data.corr()
@@ -585,6 +587,8 @@ def outcomes(df):
     player_outcomes = player_bio.merge(player_peaks, on='pid', how='left')
     player_outcomes['dpm'] = player_outcomes['o_dpm'] + player_outcomes['d_dpm']
     player_outcomes['season_x'] -= 1
+    player_outcomes = player_outcomes.merge(player_stats[['pid','player']].drop_duplicates(), on='pid', how='left')
+    player_outcomes = player_outcomes[['pid', 'player', 'season_x', 'o_dpm', 'd_dpm', 'dpm']]
     return player_outcomes
 
 #%% get latest nba stats
@@ -720,15 +724,52 @@ def clustering(start_season,end_season):
         i += 1
     
     return df_final
-"""
-def sum_of_unique_combinations(arr1, arr2):
-    sums = []
-    # Generate all unique combinations (Cartesian product) of elements
-    # from arr1 and arr2
-    for combo in itertools.product(arr1, arr2):
-        sums.append(sum(combo))
-    return sums
-"""
+
+def model_accuracy_measurement(stats_df,start,end):
+    draft_outcomes = outcomes(stats_df)
+    draft_outcomes = draft_outcomes.dropna()
+    model_pred = []; i = start
+    while(i<=end):
+        df = pd.read_excel(f'{path}/results.xlsx',f'{i}')
+        model_pred.append(df)
+        i+=1 
+    model_pred = pd.concat(model_pred)
+    model_pivot = model_pred.pivot_table(index='player',columns='season',values='median',aggfunc='mean')
+    draft_outcomes = draft_outcomes.merge(model_pivot, on='player', how='left')
+    
+    j = start; summary_df = [['year','correlation','players projected','model rotation','model starters','model DPM>1','model mean',
+                              'nba players','actual rotation','actual starters','actual DPM>1','observed mean']]
+    while(j<=end):
+        subset_df = draft_outcomes.dropna(subset=[j])
+        subset_df = subset_df[subset_df['season_x']>=j]
+        model_pred_df = model_pred[model_pred['season']==j]
+        # verify if this is correct!
+        #model_pred_df = model_pred_df[model_pred_df['player'].isin(subset_df['player'].to_list())]
+        
+        model_len = len(model_pred_df)
+        model_rot = model_len - model_pred_df['bust'].sum()
+        model_starter = model_rot - model_pred_df['rotation'].sum()
+        model_allstar = model_starter - model_pred_df['starter'].sum()
+        #model_allnba = model_allstar - model_pred_df['all star'].sum()
+        #model_mvp = model_allnba - model_pred_df['all nba'].sum()
+        model_mean = subset_df[j].mean()
+        actual_len = len(subset_df)
+        act_rot = (subset_df['dpm'] >= -1.5).sum()
+        act_starter = (subset_df['dpm'] >= -0.5).sum()
+        act_allstar = (subset_df['dpm'] >= 1).sum()
+        #act_allnba = (subset_df['dpm'] >= 1.5).sum()
+        #act_mvp = (subset_df['dpm'] >= 4.8).sum()
+        act_mean = subset_df['dpm'].mean()
+        year_corr = subset_df['dpm'].corr(subset_df[j])
+        
+        summary_df.append([j,year_corr,model_len,model_rot,model_starter,model_allstar,model_mean,
+                           actual_len,act_rot,act_starter,act_allstar,act_mean])
+        j+=1
+    
+    summary_df = pd.DataFrame(summary_df)
+    summary_df.columns = summary_df.iloc[0];summary_df = summary_df.drop(0)
+    summary_df = summary_df.apply(pd.to_numeric, errors='ignore')
+    return summary_df,draft_outcomes
 
 # Numba-accelerated function
 @njit
@@ -1075,12 +1116,14 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
     
     pivot = pivot[pivot['bust']<=0.97]
     print("total minutes for run",round((datetime.now()-start_time).total_seconds()/60,2))
-    return pivot 
+    return pivot
 
 #%% call the player comparision function
 
-#pcomps = player_comp_analysis("Kon Knueppel", 2025, player_stats.copy(), nba_stats.copy(), 1)
+pcomps = player_comp_analysis("Cameron Boozer", 2026, player_stats.copy(), nba_stats.copy(), 1)
 
-draft_list = mdist_list(2026, player_stats.copy(),0,1)
+#draft_list = mdist_list(2026, player_stats.copy(),0,1)
 
 #clustered_list = clustering(2016,2026)
+
+#model_summary = model_accuracy_measurement(nba_stats,2013,2025)
