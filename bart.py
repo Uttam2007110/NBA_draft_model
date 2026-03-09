@@ -21,8 +21,8 @@ from scipy.optimize import minimize
 
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
+#from sklearn.cluster import KMeans
+#from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import RobustScaler
 
 import matplotlib.pyplot as plt
@@ -38,8 +38,8 @@ from pandas.errors import SettingWithCopyWarning
 warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 pd.set_option('mode.chained_assignment', None)
 
-#path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
-path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
+path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 latest_season = 2026
 
@@ -304,6 +304,8 @@ player_stats.loc[((player_stats['player']=='Zvonimir Ivisic')&(player_stats['pid
 player_stats.loc[((player_stats['player']=='David Mirkovic')&(player_stats['pid']==-188962)),'pid'] = 135431
 player_stats.loc[((player_stats['player']=='Johann Grünloh')&(player_stats['pid']==-183444)),'pid'] = 135586
 player_stats.loc[((player_stats['player']=='This De Ridder')&(player_stats['pid']==-139197)),'pid'] = 134573
+player_stats.loc[((player_stats['player']=='Ivan Kharchenkov')&(player_stats['pid']==-165587)),'pid'] = 133778
+player_stats.loc[((player_stats['player']=='Aday Mara Gomez')&(player_stats['pid']==-177830)),'pid'] = 78229
 
 #%% aggregate weighted career level data instead of single season (not implemented yet)
 def pivot_data(df,df2):
@@ -726,6 +728,29 @@ def skew_kurt_error(a, target_skew, target_kurt):
     return (actual_skew - target_skew)**2 + (actual_kurt - target_kurt)**2
 
 def find_jf_params(target_mean, target_std, target_skew, target_kurt):
+    stats = jf_skew_t.stats
+    t_mean = target_mean
+    t_std = target_std
+    t_skew = target_skew
+    t_kurt = target_kurt
+
+    def objective(params):
+        a, b, loc, scale = params
+        if scale <= 0 or a <= 2 or b <= 2:
+            return 1e10
+        m, v, s, k = stats(a, b, loc=loc, scale=scale, moments='mvsk')
+        std = np.sqrt(v)
+        return ((m - t_mean) ** 2 + (std - t_std) ** 2 + (s - t_skew) ** 2 + (k - t_kurt) ** 2)
+
+    res = minimize(
+        objective,
+        x0=[5.0, 5.0, t_mean, t_std],
+        bounds=[(2.01, None), (2.01, None), (None, None), (1e-6, None)],
+        method="L-BFGS-B"
+    )
+    return res.x
+"""
+def find_jf_params(target_mean, target_std, target_skew, target_kurt):
     def objective(params):
         a, b, loc, scale = params
         # Constraints: a and b must be > 2 for kurtosis to exist
@@ -737,7 +762,7 @@ def find_jf_params(target_mean, target_std, target_skew, target_kurt):
     initial_guess = [5, 5, target_mean, target_std]
     res = minimize(objective, initial_guess, bounds=[(2.01, None), (2.01, None), (None, None), (0.01, None)])
     return res.x # Returns [a, b, loc, scale]
-
+"""
 def skewed_normal_distributions(n_samples, off_mean, off_std, off_skew, off_kurt, def_mean, def_std, def_skew, def_kurt, c):
     import scipy.stats as stats
     
@@ -817,7 +842,7 @@ def model_accuracy_measurement(stats_df,start,end):
     model_pred = []; i = start
     while(i<=end):
         df = pd.read_excel(f'{path}/results.xlsx',f'{i}')
-        df = df[df['median']>=-2.5]
+        #df = df[df['median']>=-2.5]
         model_pred.append(df)
         i+=1 
     model_pred = pd.concat(model_pred)
@@ -1103,8 +1128,8 @@ def calculate_percentile(data_list, percentile): return np.percentile(data_list,
 def mdist_list(year, p_stats, print_val, get_seniors_stats):
     start_time = datetime.now()
     nba_stats_year = extract_nba_stats(year)
-    print(f"{year} nba stats extracted")
     print()
+    print(f"{year} nba stats extracted")
     
     if(get_seniors_stats == 1):
         p_stats['adj_rating'] = data['adj_rating']
@@ -1114,6 +1139,7 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
                                 ((p_stats['mp']>=18) & (p_stats['bpm']>=2.5) & (p_stats['class']==2))|
                                 ((p_stats['mp']>=21) & (p_stats['bpm']>=3) & (p_stats['class']==3))|
                                 ((p_stats['mp']>=24) & (p_stats['bpm']>=4) & (p_stats['class']==4)))]
+        #seniors = p_stats[p_stats['pid'].isin([133778,78229])]
         names_list = seniors['pid'].to_list()
         p_stats = p_stats.drop(columns=['adj_rating'])
     else:
@@ -1232,7 +1258,7 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
 
 #pcomps = player_comp_analysis("Cooper Flagg", 2025, player_stats.copy(), nba_stats.copy(), 1)
 
-draft_list = mdist_list(2021, player_stats.copy(),0,1)
+draft_list = mdist_list(2017, player_stats.copy(),0,1)
 
 #clustered_list = clustering(2016,2026)
 
