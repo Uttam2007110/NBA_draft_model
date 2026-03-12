@@ -38,8 +38,8 @@ from pandas.errors import SettingWithCopyWarning
 warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 pd.set_option('mode.chained_assignment', None)
 
-#path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
-path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
+path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 latest_season = 2026
 
@@ -106,6 +106,12 @@ def log_adjust(df,category):
 
 def iqr_column(df,category):
     df[category] = (df[category]-df[category].quantile(0.5))/(df[category].quantile(0.75) - df[category].quantile(0.25))
+    return df
+
+def norm_inv_column(df,category):
+    df[category] = df[category].rank(pct=True)
+    df[category] = df[category].clip(upper=.999,lower=0.001)
+    df[category] = norm.ppf(df[category])
     return df
 
 def international_stats_adjustments():
@@ -208,7 +214,7 @@ def extract_player_stats():
             team_bs = team_bs.reset_index()
             data = data.merge(team_bs, left_on='team', right_on='team')
             
-            data = data.loc[(data['mp']>=2) & (data['GP']>=2)] #10, 10 is the default filter
+            data = data.loc[(data['mp']>=10) & (data['GP']>=10)] #10, 10 is the default filter
             data['blk_share'] = (data['blk']*40/data['mp'])/data['blocks_y']
             data['stl_share'] = (data['stl']*40/data['mp'])/data['steals_y']
             #data = df_class(data)
@@ -261,10 +267,12 @@ def extract_player_stats():
         data_adj['midprof'] = data_adj['mid%']*(2/(1+np.exp(-4*data_adj['midar']))-1)
         unadj_p_stats.append(data_adj.copy())
         
-        for x in ['ORB%','DRB%','BLK%','blk_share','STL%','stl_share','dunkar','AST%','TO%','ast/tov','mp']:
+        for x in ['ORB%','DRB%','BLK%','blk_share','STL%','stl_share','dunkar','AST%','TO%','ast/tov']:
             data_adj = log_adjust(data_adj,x)
         for x in ['usg','ftr','rimar','midar','3par','3P%','rim%','mid%','FT%','pfr','3prof','2par','2P%','rimprof','midprof','ORtg','drtg','bpm']:
             data_adj = iqr_column(data_adj,x)
+        for x in ['mp']:
+            data_adj = norm_inv_column(data_adj,x)
         p_stats.append(data_adj)
         i+=1
         
@@ -285,6 +293,7 @@ def extract_player_stats():
     return p_stats,unadj_p_stats
 
 data,player_stats = extract_player_stats()
+player_stats['mp_p'] = player_stats['mp'].rank(pct=True)
 data.reset_index(drop=True,inplace=True)
 player_stats.reset_index(drop=True,inplace=True)
 
@@ -342,17 +351,19 @@ def pivot_data(df,df2):
 #career_stats = pivot_data(player_stats.copy(),data.copy())
 
 #%% correlation matrix for all the stats under consideration
-data = data[['class','hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 
-             'blk_share','STL%','stl_share', 'ftr','FT%', 
-             #'BLK%','dunkar','rimar', 'rim%', 'midar', 'mid%', '3par', 'mp', 'age'
-             'rimprof','midprof','3prof','bpm','ORtg','drtg','adj_rating']]
+correl_columns = ['age','class','hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'blk_share','stl_share', 'ftr','FT%', 
+                  #'BLK%','STL%','dunkar','rimprof','midprof','3prof',
+                  'rimar', 'rim%', 'midar', 'mid%', '3par', '3P%', 'bpm','ORtg','drtg','adj_rating','mp']
 
+data = data[correl_columns]
 data = data_imputation_08_09(data.copy())
+
+scaler = RobustScaler()
+scaler.fit(data)
+data = scaler.transform(data)
+data = pd.DataFrame(data, columns=correl_columns)
+
 correlation_matrix = data.corr()
-#scaler = RobustScaler()
-#scaler.fit(data)
-#data = scaler.transform(data)
-#data = pd.DataFrame(data, columns=correlation_matrix.columns)
 """
 year_pivot = pd.pivot_table(player_stats,values=['class','hgt', 'GP', 'mp', 'usg','TS%', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 
                                                  'BLK%', 'STL%', 'ftr','FT%', 'dunkar', 'rimar', 'rim%', 'midar', 'mid%', '3par', 
@@ -466,15 +477,16 @@ def distance2(name, yr, full_matrix, data_copy, print_df):
     score_mean = full_matrix[1:]['score'].mean()
     score_std = full_matrix[1:]['score'].std()
 
-    #full_matrix = full_matrix.head(150)    
+    full_matrix = full_matrix.head(100)
+    """    
     copy = full_matrix.copy()
-    if(len(copy.loc[copy['score'] >= (score_mean + 5 * score_std)])<150):
+    if(len(copy.loc[copy['score'] >= (score_mean + 5 * score_std)])>100):
         full_matrix = full_matrix.head(150)
     else:
         full_matrix = full_matrix.loc[full_matrix['score'] >= (score_mean + 5 * score_std)] #4 or 3.75
-    
+    """
     if(print_df == 0): full_matrix = full_matrix[(full_matrix['mdist']==0)|(~(full_matrix['pid'].isin(full_matrix.loc[full_matrix['season']>=yr,'pid'])))]
-    #print(full_matrix[['player','team']].head(5))
+    #print(full_matrix[['player','team','season']].head(5))
     return full_matrix
 
 #%% nba mins per season (for padding the DARKO values for backup centers)
@@ -828,9 +840,9 @@ def clustering(start_season,end_season):
     
     centroids = pd.read_excel(f'{path}/results.xlsx','centroids')
     centroids.drop(columns=['cluster'], inplace=True)
-    centroids = centroids[['median','75th','95th']]
+    centroids = centroids[['5th','median','95th']]
     
-    distances = cdist(df_all[['median','75th','95th']], centroids, metric='euclidean')
+    distances = cdist(df_all[['5th','median','95th']], centroids, metric='euclidean')
     cluster_assignments = np.argmin(distances, axis=1)
     df_all['cluster'] = cluster_assignments + 1
     
@@ -934,6 +946,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
         p_class = p_stats.iloc[dist['index'].values[0]]['class']
         p_age = p_stats.iloc[dist['index'].values[0]]['age']
         p_mp = p_stats.iloc[dist['index'].values[0]]['mp']
+        p_mpp = p_stats.iloc[dist['index'].values[0]]['mp_p']
         p_gp = p_stats.iloc[dist['index'].values[0]]['GP']
         
         if(print_val==0): dist = dist.loc[(dist['season']<year)] #| ((dist['player']==x) & (dist['season']==year))]
@@ -1110,7 +1123,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
             dist['dpm'] = dist['o_dpm'] + dist['d_dpm']
             return dist
         else:
-            p_mins = p_mp * min(p_gp,40)
+            p_mins = p_mpp * min(p_gp,40) * 40 #p_mp
             #p_weight = np.tanh(p_mins * np.log(p_class+1)/800) * 10000
             p_weight = (p_mins/3600) * (p_class) * 100000
             p_weight = np.ceil(p_weight).astype(int)
@@ -1142,11 +1155,11 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
     if(get_seniors_stats == 1):
         p_stats['adj_rating'] = data['adj_rating']
         #seniors = p_stats[(p_stats['adj_rating']>=0.2)&(p_stats['season']==year)&(p_stats['mp']>=15)&(((p_stats['bpm']>=0) & (p_stats['class']<=1))|((p_stats['bpm']>=3.5) & (p_stats['class']>1)))]
-        seniors = p_stats[(p_stats['adj_rating']>=0.25)&(p_stats['season']==year)&(p_stats['GP']>=10)&
-                               (((p_stats['mp']>=12) & (p_stats['bpm']>=1) & (p_stats['class']==1))|
-                                ((p_stats['mp']>=18) & (p_stats['bpm']>=2.5) & (p_stats['class']==2))|
-                                ((p_stats['mp']>=21) & (p_stats['bpm']>=3) & (p_stats['class']==3))|
-                                ((p_stats['mp']>=24) & (p_stats['bpm']>=4) & (p_stats['class']==4)))]
+        seniors = p_stats[(p_stats['season']==year)&(p_stats['GP']>=10)&
+                          (((p_stats['mp']>=12) & (p_stats['bpm']>=1) & (p_stats['class']==1))|
+                          ((p_stats['mp']>=18) & (p_stats['bpm']>=2.5) & (p_stats['class']==2))|
+                          ((p_stats['mp']>=21) & (p_stats['bpm']>=3) & (p_stats['class']==3))|
+                          ((p_stats['mp']>=24) & (p_stats['bpm']>=4) & (p_stats['class']==4)))]
         #seniors = p_stats[p_stats['pid'].isin([133778,78229])]
         names_list = seniors['pid'].to_list()
         p_stats = p_stats.drop(columns=['adj_rating'])
@@ -1264,10 +1277,10 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
 
 #%% call the player comparision function
 
-#pcomps = player_comp_analysis("Darius Acuff Jr.", 2026, player_stats.copy(), nba_stats.copy(), 1)
+#pcomps = player_comp_analysis("Domantas Sabonis", 2016, player_stats.copy(), nba_stats.copy(), 1)
 
-draft_list = mdist_list(2023, player_stats.copy(),0,1)
+#draft_list = mdist_list(2016, player_stats.copy(),0,1)
 
-#clustered_list = clustering(2016,2026)
+clustered_list = clustering(2016,2026)
 
 #model_summary = model_accuracy_measurement(nba_stats,2016,2025)
