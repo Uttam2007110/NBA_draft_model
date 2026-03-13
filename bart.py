@@ -38,8 +38,8 @@ from pandas.errors import SettingWithCopyWarning
 warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 pd.set_option('mode.chained_assignment', None)
 
-path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
-#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
+#path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 latest_season = 2026
 
@@ -118,7 +118,7 @@ def international_stats_adjustments():
     df = pd.read_excel(f'{path}/player/foreign_players.xlsx','final')
     df['TS%'] = df['TS%']*100
     
-    df['mp'] = 2 + 34*(df['mp'].rank(pct=True))
+    df['mp'] = 5 + 30.7*(df['mp'].rank(pct=True))
     df['usg'] = df['usg'] + 1.5
     df['AST%'] = df['AST%'] + 0.5
     df['TO%'] = df['TO%'] + 1.8
@@ -375,120 +375,6 @@ data.hist(figsize=(10, 8), bins=50)  # Adjust figsize as needed
 plt.tight_layout() # Adjust layout to prevent overlap
 plt.show()
 
-#%% mahlanobis distance based player comps
-def distance(name, yr, full_matrix, data_copy, print_df):
-    # Computes the Mahalanobis distance for a given player to all other player.
-    cov = np.ma.cov(np.ma.masked_invalid(data_copy), rowvar=False)
-    
-    #custom weightage to specific factors, ast/tov, STL%
-    #cov[18,18] = cov[18,18] * 2
-    
-    #inverse covaiance matrix
-    invcov = np.linalg.inv(cov)\
-    
-    # Get player data
-    if(name == "Jalen Johnson"): #multiple jalen johnsons exist
-        player_data = full_matrix.loc[(full_matrix['pid']==73238)&(full_matrix['season']==yr)]
-    else:
-        player_data = full_matrix.loc[(full_matrix['player']==name)&(full_matrix['season']==yr)]
-    player_index = player_data.index[0]
-    player = data_copy.iloc[player_index]
-    #if(print_df == 1): print(player_data.squeeze())
-    
-    # Mask invalid values in the player vector
-    pvec = np.ma.masked_invalid(np.array(player))    
-    dist_array = []
-
-    for i in range(len(data_copy)):
-        # Get the ith player season
-        cdata = data_copy.iloc[i]
-
-        # Ignore the current player season
-        if i == player_index:
-            dist_array.append(0)
-            continue
-
-        # Mask invalid values
-        cvec = np.ma.masked_invalid(np.array(cdata))
-
-        # Find difference between x and y
-        delta = pvec - cvec
-
-        # Find Mahalanobis distance
-        dist = np.sqrt(np.einsum('i,ij,j', delta, invcov, delta))
-        dist_array.append(dist)
-        #dist = np.sqrt(np.einsum('nj,jk,nk->n', delta, invcov, delta))[0]
-
-    # Print out the most similar season
-    #print('Most similar: dist: {}\n{}'.format(min_val, min_player))
-    full_matrix['mdist'] = dist_array
-    full_matrix = full_matrix[['player','team','season','hgt','bpm','mdist','pid']]
-    full_matrix['score'] = 1/(full_matrix['mdist']*full_matrix['mdist']) #np.exp(-1*full_matrix['mdist']*full_matrix['mdist'])
-    full_matrix = full_matrix.sort_values(by=['score'], ascending=False)
-    full_matrix = full_matrix.loc[full_matrix['score'] >= (full_matrix[1:]['score'].mean()+4*full_matrix[1:]['score'].std())]  #3.75 or 4
-    return full_matrix
-
-def distance2(name, yr, full_matrix, data_copy, print_df):
-    # Keep rows in data_copy where the index is present in full_matrix index
-    data_copy = data_copy[data_copy.index.isin(full_matrix.index)]
-    # Compute the covariance matrix and its inverse
-    cov = np.ma.cov(np.ma.masked_invalid(data_copy), rowvar=False)    
-    # Compute inverse covariance matrix safely
-    try:
-        invcov = np.linalg.inv(cov)
-    except np.linalg.LinAlgError:
-        # If covariance is singular, use pseudo-inverse
-        invcov = np.linalg.pinv(cov)
-
-    # Get player data
-    if name == "Jalen Johnson":
-        player_data = full_matrix.loc[(full_matrix['pid'] == 73238) & (full_matrix['season'] == yr)]
-    else:
-        player_data = full_matrix.loc[(full_matrix['player'] == name) & (full_matrix['season'] == yr)]
-
-    player_index = player_data.index[0]
-    player = data_copy.iloc[player_index]
-    # Mask invalid values in the player vector
-    pvec = np.ma.masked_invalid(np.array(player))
-
-    # Convert data_copy to numpy array and mask invalid values
-    data_array = np.ma.masked_invalid(data_copy.to_numpy())
-
-    # Compute delta matrix by subtracting player vector from all rows
-    delta_matrix = data_array - pvec
-
-    # Compute Mahalanobis distances using einsum
-    temp = np.einsum('ij,jk,ik->i', delta_matrix, invcov, delta_matrix)
-    #print(temp.min(), temp.max())
-    temp = np.clip(temp, 0.0, None)
-    #print(temp.min(), temp.max())
-    dist_array = np.sqrt(temp)
-
-    # Set distance to self as 0
-    dist_array[player_index] = 0
-
-    # Add distances to full_matrix
-    full_matrix['mdist'] = dist_array
-    full_matrix = full_matrix[['player', 'team', 'season', 'hgt', 'bpm', 'mdist', 'pid']]
-    full_matrix['score'] = 1 / (full_matrix['mdist'] ** 2) # np.exp(-full_matrix['mdist']*full_matrix['mdist']/2)
-    full_matrix = full_matrix.sort_values(by='score', ascending=False)
-
-    # Filter and sort
-    score_mean = full_matrix[1:]['score'].mean()
-    score_std = full_matrix[1:]['score'].std()
-
-    full_matrix = full_matrix.head(100)
-    """    
-    copy = full_matrix.copy()
-    if(len(copy.loc[copy['score'] >= (score_mean + 5 * score_std)])>100):
-        full_matrix = full_matrix.head(150)
-    else:
-        full_matrix = full_matrix.loc[full_matrix['score'] >= (score_mean + 5 * score_std)] #4 or 3.75
-    """
-    if(print_df == 0): full_matrix = full_matrix[(full_matrix['mdist']==0)|(~(full_matrix['pid'].isin(full_matrix.loc[full_matrix['season']>=yr,'pid'])))]
-    #print(full_matrix[['player','team','season']].head(5))
-    return full_matrix
-
 #%% nba mins per season (for padding the DARKO values for backup centers)
 def mins_per_season(season):
     url = "https://api.pbpstats.com/get-totals/nba"
@@ -621,35 +507,37 @@ def outcomes(df):
     player_outcomes = player_outcomes[['pid', 'player', 'season_x', 'o_dpm', 'd_dpm', 'dpm']]
     return player_outcomes
 
-#%% get latest nba stats
-nba_stats = extract_nba_stats(latest_season)
-#draft_outcomes = outcomes(nba_stats)
-
 #%% random forest based model
-def regression_draft_model(league_stats, pre_nba_data, train_season_end):
-    dist2 = league_stats.copy()
+def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season_end):
+    off_comps = league_stats.groupby(['player_name','pid'])['o_dpm'].apply(lambda x: x.nlargest(5))
+    off_comps = off_comps.groupby(['player_name','pid']).mean()
+    off_comps = off_comps.dropna()
+    off_comps = off_comps.reset_index()
+
+    def_comps = league_stats.groupby(['player_name','pid'])['d_dpm'].apply(lambda x: x.nlargest(5))
+    def_comps = def_comps.groupby(['player_name','pid']).mean()
+    def_comps = def_comps.dropna()
+    def_comps = def_comps.reset_index()
+
+    dist2 = off_comps.copy()
+    dist2['d_dpm'] = def_comps['d_dpm']
     dist2['dpm'] = 1*dist2['o_dpm'] + 1*dist2['d_dpm']
-    dist2 = pd.pivot_table(dist2,values=['dpm'],index=['pid','player_name'],columns=['season_x'],aggfunc="sum")
-    dist2.columns = dist2.columns.droplevel(0)
-    dist2['VORP/S'] =  dist2.max(axis=1, numeric_only=True)
-    dist2['S'] =  dist2.count(axis=1, numeric_only=True)
-    dist2['S'] -= 1
-    dist2.reset_index(inplace=True)
-    dist2 = dist2[['pid','player_name','VORP/S','S']]
+    dist2 = dist2[['pid','player_name','dpm']]
     
-    pre_nba_data[['player','pid','team','season']] = player_stats[['player','pid','team','season']]
-    pre_nba_data = pre_nba_data[pre_nba_data['pid']>=0]
-    pre_nba_data = pre_nba_data.merge(dist2[['pid','VORP/S']], on=['pid'], how='left')
-    df_sorted = pre_nba_data.sort_values(by=['season', 'VORP/S'], ascending=[False, False])
-    df_sorted = df_sorted.drop_duplicates(subset=['pid'], keep='first')
-    df_sorted['VORP/S'] = df_sorted['VORP/S'].fillna(-4.0)
-    df_sorted.loc[df_sorted['VORP/S']<-5,'VORP/S'] = -4.0
+    pre_nba_data[['player','pid','team','season']] = pre_nba_raw[['player','pid','team','season']]
+    #pre_nba_data = pre_nba_data[pre_nba_data['pid']>=0]
+    pre_nba_data = pre_nba_data.merge(dist2[['pid','dpm']], on=['pid'], how='left')
+    df_sorted = pre_nba_data.sort_values(by=['season', 'dpm'], ascending=[False, False])
+    #df_sorted = df_sorted.drop_duplicates(subset=['pid'], keep='first')
+    df_sorted['dpm'] = df_sorted['dpm'].fillna(-4.0)
+    df_sorted.loc[df_sorted['dpm']<-4,'dpm'] = -4.0
     
     df_test = df_sorted[df_sorted['season']>train_season_end]
     df_train = df_sorted[df_sorted['season']<=train_season_end]
     
     model_params = ['age','hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'BLK%','blk_share', 'STL%', 
                     'stl_share', 'FT%', '2P%','3par', '3P%', 'ORtg', 'drtg','mp','adj_rating']
+    model_params = correl_columns
     
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.model_selection import cross_val_score, KFold, GridSearchCV
@@ -659,7 +547,7 @@ def regression_draft_model(league_stats, pre_nba_data, train_season_end):
     
     #cross validation
     kf = KFold(n_splits=5, shuffle=True)
-    scores = cross_val_score(model, df_train[model_params], df_train['VORP/S'], cv=kf, scoring='neg_mean_squared_error')
+    scores = cross_val_score(model, df_train[model_params], df_train['dpm'], cv=kf, scoring='neg_mean_squared_error')
     rmse_scores = np.sqrt(-scores)
     print(f"RMSE scores for each fold: {rmse_scores}")
     print(f"Mean RMSE: {np.mean(rmse_scores)}")
@@ -677,7 +565,7 @@ def regression_draft_model(league_stats, pre_nba_data, train_season_end):
                                cv=kf, scoring='neg_mean_squared_error', n_jobs=-1)
 
     # Fit GridSearchCV to the data
-    grid_search.fit(df_train[model_params], df_train['VORP/S'])
+    grid_search.fit(df_train[model_params], df_train['dpm'])
 
     print(f"Best parameters found: {grid_search.best_params_}")
     print(f"Best cross-validation RMSE: {np.sqrt(-grid_search.best_score_)}")
@@ -685,17 +573,128 @@ def regression_draft_model(league_stats, pre_nba_data, train_season_end):
     # Get the best model
     best_rf_model = grid_search.best_estimator
     """
-    model.fit(df_train[model_params], df_train['VORP/S'])
-    print("Training score",model.score(df_train[model_params], df_train['VORP/S']))
+    model.fit(df_train[model_params], df_train['dpm'])
+    print("Training score",model.score(df_train[model_params], df_train['dpm']))
     #print("feature importance",model.feature_importances_)
     df_train['fitted'] = model.predict(df_train[model_params])
     df_test['fitted'] = model.predict(df_test[model_params])
     
-    return df_train[['pid','player','team','season','VORP/S','fitted']], df_test[['pid','player','team','season','VORP/S','fitted']]
-
-#train,test = regression_draft_model(nba_stats.copy(),data.copy(),2020)
+    return df_train[['pid','player','team','season','dpm','fitted']], df_test[['pid','player','team','season','dpm','fitted']]
     
 #%% individual player comps analysis
+def distance(name, yr, full_matrix, data_copy, print_df):
+    # Computes the Mahalanobis distance for a given player to all other player.
+    cov = np.ma.cov(np.ma.masked_invalid(data_copy), rowvar=False)
+    
+    #custom weightage to specific factors, ast/tov, STL%
+    #cov[18,18] = cov[18,18] * 2
+    
+    #inverse covaiance matrix
+    invcov = np.linalg.inv(cov)\
+    
+    # Get player data
+    if(name == "Jalen Johnson"): #multiple jalen johnsons exist
+        player_data = full_matrix.loc[(full_matrix['pid']==73238)&(full_matrix['season']==yr)]
+    else:
+        player_data = full_matrix.loc[(full_matrix['player']==name)&(full_matrix['season']==yr)]
+    player_index = player_data.index[0]
+    player = data_copy.iloc[player_index]
+    #if(print_df == 1): print(player_data.squeeze())
+    
+    # Mask invalid values in the player vector
+    pvec = np.ma.masked_invalid(np.array(player))    
+    dist_array = []
+
+    for i in range(len(data_copy)):
+        # Get the ith player season
+        cdata = data_copy.iloc[i]
+
+        # Ignore the current player season
+        if i == player_index:
+            dist_array.append(0)
+            continue
+
+        # Mask invalid values
+        cvec = np.ma.masked_invalid(np.array(cdata))
+
+        # Find difference between x and y
+        delta = pvec - cvec
+
+        # Find Mahalanobis distance
+        dist = np.sqrt(np.einsum('i,ij,j', delta, invcov, delta))
+        dist_array.append(dist)
+        #dist = np.sqrt(np.einsum('nj,jk,nk->n', delta, invcov, delta))[0]
+
+    # Print out the most similar season
+    #print('Most similar: dist: {}\n{}'.format(min_val, min_player))
+    full_matrix['mdist'] = dist_array
+    full_matrix = full_matrix[['player','team','season','hgt','bpm','mdist','pid']]
+    full_matrix['score'] = 1/(full_matrix['mdist']*full_matrix['mdist']) #np.exp(-1*full_matrix['mdist']*full_matrix['mdist'])
+    full_matrix = full_matrix.sort_values(by=['score'], ascending=False)
+    full_matrix = full_matrix.loc[full_matrix['score'] >= (full_matrix[1:]['score'].mean()+4*full_matrix[1:]['score'].std())]  #3.75 or 4
+    return full_matrix
+
+def distance2(name, yr, full_matrix, data_copy, print_df):
+    # Keep rows in data_copy where the index is present in full_matrix index
+    data_copy = data_copy[data_copy.index.isin(full_matrix.index)]
+    # Compute the covariance matrix and its inverse
+    cov = np.ma.cov(np.ma.masked_invalid(data_copy), rowvar=False)    
+    # Compute inverse covariance matrix safely
+    try:
+        invcov = np.linalg.inv(cov)
+    except np.linalg.LinAlgError:
+        # If covariance is singular, use pseudo-inverse
+        invcov = np.linalg.pinv(cov)
+
+    # Get player data
+    if name == "Jalen Johnson":
+        player_data = full_matrix.loc[(full_matrix['pid'] == 73238) & (full_matrix['season'] == yr)]
+    else:
+        player_data = full_matrix.loc[(full_matrix['player'] == name) & (full_matrix['season'] == yr)]
+
+    player_index = player_data.index[0]
+    player = data_copy.iloc[player_index]
+    # Mask invalid values in the player vector
+    pvec = np.ma.masked_invalid(np.array(player))
+
+    # Convert data_copy to numpy array and mask invalid values
+    data_array = np.ma.masked_invalid(data_copy.to_numpy())
+
+    # Compute delta matrix by subtracting player vector from all rows
+    delta_matrix = data_array - pvec
+
+    # Compute Mahalanobis distances using einsum
+    temp = np.einsum('ij,jk,ik->i', delta_matrix, invcov, delta_matrix)
+    #print(temp.min(), temp.max())
+    temp = np.clip(temp, 0.0, None)
+    #print(temp.min(), temp.max())
+    dist_array = np.sqrt(temp)
+
+    # Set distance to self as 0
+    dist_array[player_index] = 0
+
+    # Add distances to full_matrix
+    full_matrix['mdist'] = dist_array
+    full_matrix = full_matrix[['player', 'team', 'season', 'hgt', 'bpm', 'mdist', 'pid']]
+    full_matrix['score'] = 1 / (full_matrix['mdist'] ** 2) # np.exp(-full_matrix['mdist']*full_matrix['mdist']/2)
+    full_matrix = full_matrix.sort_values(by='score', ascending=False)
+
+    # Filter and sort
+    score_mean = full_matrix[1:]['score'].mean()
+    score_std = full_matrix[1:]['score'].std()
+
+    full_matrix = full_matrix.head(100)
+    """    
+    copy = full_matrix.copy()
+    if(len(copy.loc[copy['score'] >= (score_mean + 5 * score_std)])>100):
+        full_matrix = full_matrix.head(150)
+    else:
+        full_matrix = full_matrix.loc[full_matrix['score'] >= (score_mean + 5 * score_std)] #4 or 3.75
+    """
+    if(print_df == 0): full_matrix = full_matrix[(full_matrix['mdist']==0)|(~(full_matrix['pid'].isin(full_matrix.loc[full_matrix['season']>=yr,'pid'])))]
+    #print(full_matrix[['player','team','season']].head(5))
+    return full_matrix
+
 def fleishman_coeffs(mean, std, skew, kurt):
     def equations(vars):
         a, b, c, d = vars
@@ -1022,8 +1021,8 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
             allnba = np.sum(np.array(distribution) >= 2)/(samples) #4, 1.5
             mvp = np.sum(np.array(distribution) >= 4.5)/(samples) #7.5, 3.75
             
-            p_25 = round(np.percentile(distribution, 50),2) #4
-            p_50 = round(np.percentile(distribution, 75),2) #4
+            p_25 = round(np.percentile(distribution, 5),2) #4
+            p_50 = round(np.percentile(distribution, 50),2) #4
             p_90 = round(np.percentile(distribution, 95),2) #4
             
             dist2 = league_stats[league_stats['pid'].isin(dist['pid'])]
@@ -1107,8 +1106,8 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
             #print("skew - ",skewness)
             #print("kurt - ",kurtosis)
             print()
-            print("median DARKO",p_25)
-            print("75th DARKO",p_50)
+            print("5th DARKO",p_25)
+            print("median DARKO",p_50)
             print("95th DARKO",p_90)
             
             off_comps = comps.groupby(['pid','player_name'])['o_dpm'].apply(lambda x: x.nlargest(5))
@@ -1154,13 +1153,15 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
     
     if(get_seniors_stats == 1):
         p_stats['adj_rating'] = data['adj_rating']
-        #seniors = p_stats[(p_stats['adj_rating']>=0.2)&(p_stats['season']==year)&(p_stats['mp']>=15)&(((p_stats['bpm']>=0) & (p_stats['class']<=1))|((p_stats['bpm']>=3.5) & (p_stats['class']>1)))]
+        """
         seniors = p_stats[(p_stats['season']==year)&(p_stats['GP']>=10)&
-                          (((p_stats['mp']>=12) & (p_stats['bpm']>=1) & (p_stats['class']==1))|
+                          (((p_stats['mp']>=12) & (p_stats['bpm']>=-1) & (p_stats['class']==1))|
                           ((p_stats['mp']>=18) & (p_stats['bpm']>=2.5) & (p_stats['class']==2))|
                           ((p_stats['mp']>=21) & (p_stats['bpm']>=3) & (p_stats['class']==3))|
                           ((p_stats['mp']>=24) & (p_stats['bpm']>=4) & (p_stats['class']==4)))]
+        """
         #seniors = p_stats[p_stats['pid'].isin([133778,78229])]
+        seniors = p_stats[(p_stats['season']==year)&(p_stats['GP']>=10)&(p_stats['mp']>=10)]
         names_list = seniors['pid'].to_list()
         p_stats = p_stats.drop(columns=['adj_rating'])
     else:
@@ -1247,7 +1248,6 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
     pivot['ceil'] = pivot['distribution'].apply(lambda x: calculate_percentile(x, 95))
     """
     pivot = result.copy()
-    #pivot = pivot[pivot['95th']>=-1]    #check this
     print()
     print("rotation caliber players",round(pivot['rotation'].sum(),2))
     print("starter caliber players",round(pivot['starter'].sum(),2))
@@ -1270,17 +1270,24 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
     pivot['all star'] = round(pivot['all star'],3)
     pivot['all nba'] = round(pivot['all nba'],3)
     pivot['mvp'] = round(pivot['mvp'],3)
+    
+    #pivot = pivot[pivot['bust']<1]    #check this
     pivot = pivot[['player','team','age','season','bust','rotation','starter','all star','all nba','mvp','5th','median','95th']]
-
     print("total minutes for run",round((datetime.now()-start_time).total_seconds()/60,2))
     return pivot
 
+#%% get latest nba stats
+nba_stats = extract_nba_stats(latest_season)
+#draft_outcomes = outcomes(nba_stats)
+
 #%% call the player comparision function
 
-#pcomps = player_comp_analysis("Domantas Sabonis", 2016, player_stats.copy(), nba_stats.copy(), 1)
+#pcomps = player_comp_analysis("Isaiah Hartenstein", 2017, player_stats.copy(), nba_stats.copy(), 1)
 
-#draft_list = mdist_list(2016, player_stats.copy(),0,1)
+draft_list = mdist_list(2026, player_stats.copy(),0,1)
 
-clustered_list = clustering(2016,2026)
+#clustered_list = clustering(2016,2026)
 
 #model_summary = model_accuracy_measurement(nba_stats,2016,2025)
+
+#train,test = regression_draft_model(nba_stats.copy(),data.copy(),player_stats.copy(),2019)
