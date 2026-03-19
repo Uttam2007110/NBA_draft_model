@@ -28,12 +28,13 @@ from sklearn.preprocessing import RobustScaler
 import matplotlib.pyplot as plt
 from matplotlib.ticker import PercentFormatter
 
-from numba import njit
+#from numba import njit
 import requests
 from datetime import datetime
 
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 from pandas.errors import SettingWithCopyWarning
 warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 pd.set_option('mode.chained_assignment', None)
@@ -231,18 +232,18 @@ def extract_player_stats():
             data['3par'] = data['3PA']/(data['2PA']+data['3PA'])
             data['ftr'] = data['FTA']/(data['2PA']+data['3PA'])
             
-            data_adj['3P%'] = data_adj['3P%'].fillna(0)
-            data_adj['mid%'] = data_adj['mid%'].fillna(0)
-            data_adj['rim%'] = data_adj['rim%'].fillna(0)
-            #data = data.loc[data['rimar'].isna() == False]
-            #data = data.loc[data['midar'].isna() == False]
-            #data = data.loc[data['ftr'].isna() == False]
+            #data_adj['3P%'] = data_adj['3P%'].fillna(0)
+            #data_adj['mid%'] = data_adj['mid%'].fillna(0)
+            #data_adj['rim%'] = data_adj['rim%'].fillna(0)
+            #data_adj['dunk%'] = data_adj['dunk%'].fillna(0)
+
             data['2par'] = 1 - data['3par']
             data['2P%'] = (((data['TS%']/100) * (1+0.44*data['ftr']) * 2)-(data['ftr']*data['FT%'] + 3*data['3par']*data['3P%']))/(2*data['2par'])
             data['age'] = ((pd.to_datetime(f'{i}-11-01', format="%Y-%m-%d") - pd.to_datetime(pd.Series(data['dob']), format="%Y-%m-%d"))/ np.timedelta64(1, 'D'))/365
             
-            data_adj = data[['player','pid','team','season','class','hgt','GP','mp','usg','TS%','ORB%','DRB%','AST%','TO%','ast/tov','BLK%','blk_share',
-                             'STL%','stl_share','pfr','ftr','FT%','dunkar','rimar','rim%','midar','mid%','3par','3P%','ORtg','drtg','bpm','age','2par','2P%','pick']]
+            data_adj = data[['player','pid','team','season','class','hgt','GP','mp','usg','TS%','ORB%','DRB%','AST%','TO%','ast/tov',
+                             'BLK%','blk_share','STL%','stl_share','pfr','ftr','FT%','dunkar','rimar','rim%','midar','mid%',
+                             '3par','3P%','ORtg','drtg','bpm','age','2par','2P%']]
         
         #add internationals data
         data_adj = pd.concat([data_adj, internationals[internationals['season']==i]])
@@ -255,6 +256,8 @@ def extract_player_stats():
         data_adj.loc[data_adj['mid%']<0,'mid%'] = 0
         data_adj.loc[data_adj['rim%']>1,'rim%'] = 1
         data_adj.loc[data_adj['rim%']<0,'rim%'] = 0
+        #data_adj.loc[data_adj['dunk%']>1,'dunk%'] = 1
+        #data_adj.loc[data_adj['dunk%']<0,'dunk%'] = 0
 
         data_adj['3par'] = data_adj['3par'].fillna(0)
         data_adj['ftr'] = data_adj['ftr'].clip(upper=3)
@@ -267,11 +270,11 @@ def extract_player_stats():
         data_adj['midprof'] = data_adj['mid%']*(2/(1+np.exp(-4*data_adj['midar']))-1)
         unadj_p_stats.append(data_adj.copy())
         
-        for x in ['ORB%','DRB%','BLK%','blk_share','STL%','stl_share','dunkar','AST%','TO%','ast/tov']:
+        for x in ['ORB%','DRB%','BLK%','blk_share','STL%','stl_share','AST%','TO%','ast/tov']:
             data_adj = log_adjust(data_adj,x)
         for x in ['usg','ftr','rimar','midar','3par','3P%','rim%','mid%','FT%','pfr','3prof','2par','2P%','rimprof','midprof','ORtg','drtg','bpm']:
             data_adj = iqr_column(data_adj,x)
-        for x in ['mp']:
+        for x in ['mp','dunkar']:
             data_adj = norm_inv_column(data_adj,x)
         p_stats.append(data_adj)
         i+=1
@@ -353,7 +356,7 @@ def pivot_data(df,df2):
 #%% correlation matrix for all the stats under consideration
 correl_columns = ['age','class','hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'blk_share','stl_share', 'ftr','FT%', 
                   #'BLK%','STL%','dunkar','rimprof','midprof','3prof',
-                  'rimar', 'rim%', 'midar', 'mid%', '3par', '3P%', 'bpm','ORtg','drtg','adj_rating','mp']
+                  'dunkar','rimar', 'rim%', 'midar', 'mid%', '3par', '3P%', 'bpm','ORtg','drtg','adj_rating','mp']
 
 data = data[correl_columns]
 data = data_imputation_08_09(data.copy())
@@ -581,59 +584,7 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
     
     return df_train[['pid','player','team','season','dpm','fitted']], df_test[['pid','player','team','season','dpm','fitted']]
     
-#%% individual player comps analysis
-def distance(name, yr, full_matrix, data_copy, print_df):
-    # Computes the Mahalanobis distance for a given player to all other player.
-    cov = np.ma.cov(np.ma.masked_invalid(data_copy), rowvar=False)
-    
-    #custom weightage to specific factors, ast/tov, STL%
-    #cov[18,18] = cov[18,18] * 2
-    
-    #inverse covaiance matrix
-    invcov = np.linalg.inv(cov)\
-    
-    # Get player data
-    if(name == "Jalen Johnson"): #multiple jalen johnsons exist
-        player_data = full_matrix.loc[(full_matrix['pid']==73238)&(full_matrix['season']==yr)]
-    else:
-        player_data = full_matrix.loc[(full_matrix['player']==name)&(full_matrix['season']==yr)]
-    player_index = player_data.index[0]
-    player = data_copy.iloc[player_index]
-    #if(print_df == 1): print(player_data.squeeze())
-    
-    # Mask invalid values in the player vector
-    pvec = np.ma.masked_invalid(np.array(player))    
-    dist_array = []
-
-    for i in range(len(data_copy)):
-        # Get the ith player season
-        cdata = data_copy.iloc[i]
-
-        # Ignore the current player season
-        if i == player_index:
-            dist_array.append(0)
-            continue
-
-        # Mask invalid values
-        cvec = np.ma.masked_invalid(np.array(cdata))
-
-        # Find difference between x and y
-        delta = pvec - cvec
-
-        # Find Mahalanobis distance
-        dist = np.sqrt(np.einsum('i,ij,j', delta, invcov, delta))
-        dist_array.append(dist)
-        #dist = np.sqrt(np.einsum('nj,jk,nk->n', delta, invcov, delta))[0]
-
-    # Print out the most similar season
-    #print('Most similar: dist: {}\n{}'.format(min_val, min_player))
-    full_matrix['mdist'] = dist_array
-    full_matrix = full_matrix[['player','team','season','hgt','bpm','mdist','pid']]
-    full_matrix['score'] = 1/(full_matrix['mdist']*full_matrix['mdist']) #np.exp(-1*full_matrix['mdist']*full_matrix['mdist'])
-    full_matrix = full_matrix.sort_values(by=['score'], ascending=False)
-    full_matrix = full_matrix.loc[full_matrix['score'] >= (full_matrix[1:]['score'].mean()+4*full_matrix[1:]['score'].std())]  #3.75 or 4
-    return full_matrix
-
+#%% mahalanobis distance algo
 def distance2(name, yr, full_matrix, data_copy, print_df):
     # Keep rows in data_copy where the index is present in full_matrix index
     data_copy = data_copy[data_copy.index.isin(full_matrix.index)]
@@ -686,7 +637,7 @@ def distance2(name, yr, full_matrix, data_copy, print_df):
     full_matrix = full_matrix.head(100)
     """    
     copy = full_matrix.copy()
-    if(len(copy.loc[copy['score'] >= (score_mean + 5 * score_std)])>100):
+    if(len(copy.loc[copy['score'] >= (score_mean + 5 * score_std)])<150):
         full_matrix = full_matrix.head(150)
     else:
         full_matrix = full_matrix.loc[full_matrix['score'] >= (score_mean + 5 * score_std)] #4 or 3.75
@@ -695,6 +646,7 @@ def distance2(name, yr, full_matrix, data_copy, print_df):
     #print(full_matrix[['player','team','season']].head(5))
     return full_matrix
 
+#%% individual player comps analysis
 def fleishman_coeffs(mean, std, skew, kurt):
     def equations(vars):
         a, b, c, d = vars
@@ -768,20 +720,7 @@ def find_jf_params(target_mean, target_std, target_skew, target_kurt):
         method="L-BFGS-B"
     )
     return res.x
-"""
-def find_jf_params(target_mean, target_std, target_skew, target_kurt):
-    def objective(params):
-        a, b, loc, scale = params
-        # Constraints: a and b must be > 2 for kurtosis to exist
-        if a <= 2 or b <= 2 or scale <= 0: return 1e10        
-        m, v, s, k = jf_skew_t.stats(a, b, loc=loc, scale=scale, moments='mvsk')
-        return (m - target_mean)**2 + (np.sqrt(v) - target_std)**2 + (s - target_skew)**2 + (k - target_kurt)**2
 
-    # Initial guess: a=b=5 (symmetric), loc=mean, scale=std
-    initial_guess = [5, 5, target_mean, target_std]
-    res = minimize(objective, initial_guess, bounds=[(2.01, None), (2.01, None), (None, None), (0.01, None)])
-    return res.x # Returns [a, b, loc, scale]
-"""
 def skewed_normal_distributions(n_samples, off_mean, off_std, off_skew, off_kurt, def_mean, def_std, def_skew, def_kurt, c):
     import scipy.stats as stats
     
@@ -907,7 +846,7 @@ def model_accuracy_measurement(stats_df,start,end):
     summary_df.columns = summary_df.iloc[0];summary_df = summary_df.drop(0)
     summary_df = summary_df.apply(pd.to_numeric, errors='ignore')
     return summary_df,draft_outcomes
-
+"""
 # Numba-accelerated function
 @njit
 def sum_of_unique_combinations(arr1, arr2):
@@ -916,7 +855,7 @@ def sum_of_unique_combinations(arr1, arr2):
         for j in range(len(arr2)):
             result.append(arr1[i] + arr2[j])
     return result
-
+"""
 def weighted_mean(var, wts):
     return np.average(var, weights=wts)
 
@@ -1282,9 +1221,9 @@ nba_stats = extract_nba_stats(latest_season)
 
 #%% call the player comparision function
 
-#pcomps = player_comp_analysis("Isaiah Hartenstein", 2017, player_stats.copy(), nba_stats.copy(), 1)
+#pcomps = player_comp_analysis("Unisa Turay", 2024, player_stats.copy(), nba_stats.copy(), 1)
 
-draft_list = mdist_list(2026, player_stats.copy(),0,1)
+draft_list = mdist_list(2024, player_stats.copy(),0,1)
 
 #clustered_list = clustering(2016,2026)
 
