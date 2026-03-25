@@ -13,10 +13,22 @@ import pandas as pd
 import re
 import time
 import datetime
+import cloudscraper
 
-start_season = 2003
-end_season = 2007
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+start_season = 2026
+end_season = 2026
 option = '' # G-League, NCAA, CBA, International is default
+
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
+
+path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 #%% functions
 def league_mapping(option):
@@ -32,10 +44,15 @@ def league_mapping(option):
             11:'Israeli-BSL', 6:'Italian-Lega-Basket-Serie-A', 10:'Lithuanian-LKL', 4:'Spanish-ACB', 7:'Turkish-BSL', 35:'VTB-United-League'}
     return league_code
     
-def player_dob_height(url):
-    url = f"https://basketball.realgm.com/{url}"
-    r = requests.get(url, verify=False)
-    soup = BeautifulSoup(r.text, 'html.parser')
+def player_dob_height(u):
+    url = f"https://basketball.realgm.com/{u}"
+    #r = requests.get(url, verify=False)
+    #soup = BeautifulSoup(r.text, 'html.parser')
+    
+    scraper = cloudscraper.create_scraper()
+    response = scraper.get(url)
+    soup = BeautifulSoup(response.text, "html.parser")
+
     player = soup.find_all('div', class_='wrapper clearfix container')[0]
     playerprofile = re.sub(r'\n\s*\n', r'\n', player.get_text().strip(), flags=re.M)
     output = playerprofile + "\n"
@@ -82,11 +99,16 @@ def extract_table_data(code,league,season,data_type,data_filter):
             url = f"https://basketball.realgm.com/international/league/{code}/{league}/team-stats/{season}/{data_type}"
         else: url = f"https://basketball.realgm.com/international/league/{code}/{league}/stats/{season}/{data_type}/{data_filter}/All/points/All/desc/1/Regular_Season"
     
-    response = requests.get(url, verify=False)
-    soup = BeautifulSoup(response.content, 'html.parser')
-    #tables = soup.find_all('table')
+    scraper = cloudscraper.create_scraper()
+    html = scraper.get(url).text
     
+    #response = requests.get(url, headers=headers, verify=False)
+    soup = BeautifulSoup(html, 'html.parser')
     table = soup.find('table')
+    
+    #tables = pd.read_html(html)
+    #table = tables[0]
+    
     table_data = []
     for row in table.find_all('tr'):
         row_data = []; links = []
@@ -180,6 +202,7 @@ def all_leagues_aggregate(start_season,option):
         league,exceptions = aggregate_stats_seasons(x,code[x],start_season)
         if(len(league) > 0): full_aggregate.append(league)
         full_exceptions.append(exceptions)
+        print(full_aggregate)
     
     full_aggregate = pd.concat(full_aggregate)
     return full_aggregate,full_exceptions
@@ -203,11 +226,20 @@ def pivot_data(df):
     return df0
 
 def aggregate_age_dob(df):
-    print("unique entries",len(df['link_1_x'].unique()))
+    #eliminate ids whos data is already present
+    existing = pd.read_excel(f'{path}/player/foreign_players.xlsx','unadjusted')
+    existing = existing['link_1_x'].drop_duplicates().to_list()
+    new_list = list(set(df['link_1_x'].unique()) - set(existing))
+    
+    print("unique entries",len(new_list))
     bio = []; c = 0
-    for links in df['link_1_x'].unique():
-        hgt,dob = player_dob_height(links)
-        bio.append([links,hgt,dob])
+    for links in new_list:
+        try:
+            hgt,dob = player_dob_height(links)
+            bio.append([links,hgt,dob])
+            print(links,hgt,dob)
+        except IndexError:
+            print(f'{links} skipped due to error')
         #dob_list.append(dob)
         c+=1 
         if(c%60 == 0): time.sleep(3); print(c)
@@ -237,6 +269,9 @@ file0 = file0.loc[(file0['mp']>=10) & (file0['GP']>=10)]
 #%% get the dob and height for the players
 bio = aggregate_age_dob(file0)
 
+#%% read excel file to get updated player bios
+bio = pd.read_excel(f'{path}/player/foreign_players.xlsx','bio')
+
 #%% merge age info with the stats and do final processing
 file0 = file0.merge(bio, left_on=['link_1_x'], right_on=['link_1_x'])
 file0['dob'] = pd.to_datetime(file0['dob'], format='mixed', errors='coerce')
@@ -251,7 +286,7 @@ file0['pid'] = file0['link_1_x'].str.split('/').str[4]
 file0[['dunkar','rimar','rim%','midar','mid%','bpm']] = np.nan
 
 final_data = file0[['player','pid','team','season','class','hgt','GP','mp','usg','TS%','ORB%','DRB%','AST%','TO%','ast/tov','BLK%','blk_share',
-                 'STL%','stl_share','pfr','ftr','FT%','dunkar','rimar','rim%','midar','mid%','3par','3P%','ORtg','drtg','bpm']]
+                 'STL%','stl_share','pfr','ftr','FT%','dunkar','rimar','rim%','midar','mid%','3par','3P%','ORtg','drtg','bpm','age']]
 final_data = final_data.apply(pd.to_numeric, errors='ignore')
 final_data['team'] = final_data['team'].str.replace('-', ' ')
 final_data['pid'] = final_data['pid'] * -1
