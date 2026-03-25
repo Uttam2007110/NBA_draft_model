@@ -39,8 +39,8 @@ from pandas.errors import SettingWithCopyWarning
 warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 pd.set_option('mode.chained_assignment', None)
 
-#path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
-path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
+path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 latest_season = 2026
 
@@ -789,63 +789,185 @@ def clustering(start_season,end_season):
         df = df_all[df_all['season'] == i]
         df = df.drop_duplicates(subset=['player'], keep='first')
         df = df.set_index('cluster')
+        df = df.drop(['consensus'],axis=1)
         df_final.append(df)
         i += 1
     
     return df_final
 
+def list_to_df(l):
+    l = pd.DataFrame(l)
+    l.columns = l.iloc[0];l = l.drop(0)
+    l = l.apply(pd.to_numeric, errors='ignore')
+    return l
+
+def pr_gain_area(y_true,y_scores):
+    y_true = np.asarray(y_true)
+    y_scores = np.asarray(y_scores)
+
+    order = np.argsort(-y_scores)
+    y_true = y_true[order]
+
+    P = np.sum(y_true)
+    N = len(y_true) - P
+    tp = np.cumsum(y_true)
+    fp = np.cumsum(1 - y_true)
+
+    eps = 1e-10
+    precision = tp / (tp + fp + eps)
+    recall = tp / (P + eps)
+    mask = (precision > 1e-10) & (recall > 1e-10)
+    precision = precision[mask]
+    recall = recall[mask]
+    
+    pi = P / (P + N)
+    precision_gain = (precision - pi) / ((1 - pi) * precision + eps)
+    recall_gain = (recall - pi) / ((1 - pi) * recall + eps)
+
+    # Add (0,0) anchor as required by PRG curve definition
+    precision_gain = np.concatenate(([0], precision_gain))
+    recall_gain = np.concatenate(([0], recall_gain))
+    mask = (
+        np.isfinite(precision_gain) &
+        np.isfinite(recall_gain) &
+        (np.abs(precision_gain) < 100) &
+        (np.abs(recall_gain) < 100)
+    )
+
+    precision_gain = precision_gain[mask]
+    recall_gain = recall_gain[mask]
+
+    # ---- HANDLE CROSSING POINTS (CRITICAL STEP) ----
+    # Insert points where recall_gain crosses 0
+    new_rg = []
+    new_pg = []
+
+    for i in range(len(recall_gain) - 1):
+        rg1, rg2 = recall_gain[i], recall_gain[i+1]
+        pg1, pg2 = precision_gain[i], precision_gain[i+1]
+        new_rg.append(rg1)
+        new_pg.append(pg1)
+        # If crossing zero, interpolate
+        if rg1 * rg2 < 0:
+            t = rg1 / (rg1 - rg2)
+            rg0 = 0
+            pg0 = pg1 + t * (pg2 - pg1)
+            new_rg.append(rg0)
+            new_pg.append(pg0)
+
+    new_rg.append(recall_gain[-1])
+    new_pg.append(precision_gain[-1])
+
+    recall_gain = np.array(new_rg)
+    precision_gain = np.array(new_pg)
+
+    # Sort by recall gain
+    order = np.argsort(recall_gain)
+    recall_gain = recall_gain[order]
+    precision_gain = precision_gain[order]
+    
+    # Remove duplicates (VERY IMPORTANT)
+    _, unique_idx = np.unique(recall_gain, return_index=True)
+    recall_gain = recall_gain[unique_idx]
+    precision_gain = precision_gain[unique_idx]
+
+    # ---- TRAPEZOIDAL INTEGRATION ----
+    area = 0.0
+    for i in range(len(recall_gain) - 1):
+        dx = recall_gain[i+1] - recall_gain[i]
+        # skip pathological segments
+        if abs(dx) > 10:
+            continue
+        avg_height = (precision_gain[i] + precision_gain[i+1]) / 2
+        if abs(avg_height) > 100:
+            continue
+        area += dx * avg_height
+    return area
+
 def model_accuracy_measurement(stats_df,start,end):
+    from sklearn.metrics import brier_score_loss, log_loss, average_precision_score, roc_auc_score
+    
     draft_outcomes = outcomes(stats_df)
     draft_outcomes = draft_outcomes.dropna()
-    model_pred = []; i = start
+    observed_outcomes = [['year','bust rate','rotation rate','starter rate','all star rate','all nba rate','correlation']]
+    brier_scores = [['year','sample size','bust brier score','rotation brier score','starter brier score','all star brier score','all nba brier score']]
+    log_loss_score = [['year','sample size','bust log loss','rotation log loss','starter log loss','all star log loss','all nba log loss']]
+    roc_auc = [['year','sample size','bust roc auc','rotation roc auc','starter roc auc','all star roc auc','all nba roc auc']]
+    pr_auc = [['year','sample size','bust pr auc','rotation pr auc','starter pr auc','all star pr auc','all nba pr auc']]
+    pr_gain = [['year','sample size','bust pr gain','rotation pr gain','starter pr gain','all star pr gain','all nba pr gain']]
+    
+    i = start
     while(i<=end):
-        df = pd.read_excel(f'{path}/results.xlsx',f'{i}')
-        #df = df[df['median']>=-2.5]
-        model_pred.append(df)
-        i+=1 
-    model_pred = pd.concat(model_pred)
-    model_pivot = model_pred.pivot_table(index='player',columns='season',values='median',aggfunc='mean')
-    #draft_outcomes = draft_outcomes.merge(model_pivot, on='player', how='left')
-    draft_outcomes = model_pivot.merge(draft_outcomes, on='player', how='outer')
+        model_pred = pd.read_excel(f'{path}/results.xlsx',f'{i}')
+        model_pred['all nba'] += model_pred['mvp']
+        model_pred['all star'] += model_pred['all nba']
+        model_pred['starter'] += model_pred['all star']
+        model_pred['rotation'] = 1-model_pred['bust']
+        #model_pivot = model_pred.pivot_table(index='player',columns='season',values='median',aggfunc='mean')
+        #draft_outcomes = draft_outcomes.merge(model_pivot, on='player', how='left')
+        model_pred = model_pred.merge(draft_outcomes[['player','season_x','dpm']], on='player', how='left')
+        model_pred['dpm'] = model_pred['dpm'].fillna(-4)
+        model_pred['dpm'] = np.where(model_pred['season_x'] < i, -4, model_pred['dpm'])
+        model_pred['a_bust'] = np.where(model_pred['dpm'] <= -1, 1, 0)
+        model_pred['a_rotation'] = np.where((model_pred['dpm'] > -1), 1, 0) #& (model_pred['dpm'] <= 0)
+        model_pred['a_starter'] = np.where((model_pred['dpm'] > 0), 1, 0) #& (model_pred['dpm'] <= 1)
+        model_pred['a_all star'] = np.where((model_pred['dpm'] > 1), 1, 0) #& (model_pred['dpm'] <= 2)
+        model_pred['a_all nba'] = np.where((model_pred['dpm'] > 2), 1, 0) #& (model_pred['dpm'] <= 4.5)
+        model_pred['a_mvp'] = np.where(model_pred['dpm'] > 4.5, 1, 0)
+        
+        #check if this is needed
+        #model_pred = model_pred[(model_pred['season_x']>=i)&(model_pred['season_x']<=i+1)]
+        
+        observed_outcomes.append([i,model_pred['bust'].sum()/len(model_pred),model_pred['rotation'].sum()/len(model_pred),
+                                  model_pred['starter'].sum()/len(model_pred),model_pred['all star'].sum()/len(model_pred),
+                                  model_pred['all nba'].sum()/len(model_pred),
+                                  model_pred['dpm'].corr(model_pred['median'])])
+        
+        brier_scores.append([i,len(model_pred),
+                             brier_score_loss(model_pred['a_bust'], model_pred['bust']),
+                             brier_score_loss(model_pred['a_rotation'], model_pred['rotation']),
+                             brier_score_loss(model_pred['a_starter'], model_pred['starter']),
+                             brier_score_loss(model_pred['a_all star'], model_pred['all star']),
+                             brier_score_loss(model_pred['a_all nba'], model_pred['all nba'])])
+           
+        log_loss_score.append([i,len(model_pred),                  
+                             log_loss(model_pred['a_bust'], model_pred['bust']),
+                             log_loss(model_pred['a_rotation'], model_pred['rotation']),
+                             log_loss(model_pred['a_starter'], model_pred['starter']),
+                             log_loss(model_pred['a_all star'], model_pred['all star']),
+                             log_loss(model_pred['a_all nba'], model_pred['all nba'])])
+        
+        roc_auc.append([i,len(model_pred),                     
+                             roc_auc_score(model_pred['a_bust'], model_pred['bust'], average='weighted'),
+                             roc_auc_score(model_pred['a_rotation'], model_pred['rotation'], average='weighted'),
+                             roc_auc_score(model_pred['a_starter'], model_pred['starter'], average='weighted'),
+                             roc_auc_score(model_pred['a_all star'], model_pred['all star'], average='weighted'),
+                             roc_auc_score(model_pred['a_all nba'], model_pred['all nba'], average='weighted')])
+        
+        pr_auc.append([i,len(model_pred),                     
+                             average_precision_score(model_pred['a_bust'], model_pred['bust']),
+                             average_precision_score(model_pred['a_rotation'], model_pred['rotation']),
+                             average_precision_score(model_pred['a_starter'], model_pred['starter']),
+                             average_precision_score(model_pred['a_all star'], model_pred['all star']),
+                             average_precision_score(model_pred['a_all nba'], model_pred['all nba'])])
+        
+        pr_gain.append([i,len(model_pred),                     
+                             pr_gain_area(model_pred['a_bust'], model_pred['bust']),
+                             pr_gain_area(model_pred['a_rotation'], model_pred['rotation']),
+                             pr_gain_area(model_pred['a_starter'], model_pred['starter']),
+                             pr_gain_area(model_pred['a_all star'], model_pred['all star']),
+                             pr_gain_area(model_pred['a_all nba'], model_pred['all nba'])])
+        
+        i+=1
     
-    j = start; summary_df = [['year','correlation','players projected','model rotation','model starters','model DPM>1','model mean',
-                              'nba players','actual rotation','actual starters','actual DPM>1','observed mean']]
-    while(j<=end):
-        #subset_df = draft_outcomes.dropna(subset=[j])
-        subset_df = draft_outcomes[(draft_outcomes['season_x']==j)|(draft_outcomes[j].notna())]
-        #subset_df = subset_df[subset_df['season_x']>=j]
-        model_pred_df = model_pred[model_pred['season']==j]
-        # verify if this is correct!
-        #model_pred_df = model_pred_df[model_pred_df['player'].isin(subset_df['player'].to_list())]
-        
-        model_len = len(model_pred_df)
-        model_rot = model_len - model_pred_df['bust'].sum()
-        model_starter = model_rot - model_pred_df['rotation'].sum()
-        model_allstar = model_starter - model_pred_df['starter'].sum()
-        #model_allnba = model_allstar - model_pred_df['all star'].sum()
-        #model_mvp = model_allnba - model_pred_df['all nba'].sum()
-        model_mean = model_pred_df['median'].mean()
-        
-        actual_len = len(subset_df['dpm'].dropna())
-        act_mean = subset_df['dpm'].mean()
-        subset_df['dpm'] = subset_df['dpm'].fillna(-2.5*1+-1.5*1)
-        subset_df[j] = subset_df[j].fillna(-2.5)
-        
-        act_rot = (subset_df['dpm'] >= -1).sum()
-        act_starter = (subset_df['dpm'] >= 0).sum()
-        act_allstar = (subset_df['dpm'] >= 1).sum()
-        #act_allnba = (subset_df['dpm'] >= 2).sum()
-        #act_mvp = (subset_df['dpm'] >= 4.5).sum()
-        year_corr = subset_df['dpm'].corr(subset_df[j])
-        
-        summary_df.append([j,year_corr,model_len,model_rot,model_starter,model_allstar,model_mean,
-                           actual_len,act_rot,act_starter,act_allstar,act_mean])
-        j+=1
+    observed_outcomes = list_to_df(observed_outcomes)
+    brier_scores = list_to_df(brier_scores)
+    log_loss_score = list_to_df(log_loss_score)
+    roc_auc = list_to_df(roc_auc)
+    pr_auc = list_to_df(pr_auc)
+    pr_gain = list_to_df(pr_gain)
+    return observed_outcomes,brier_scores,log_loss_score,roc_auc,pr_auc,pr_gain
     
-    summary_df = pd.DataFrame(summary_df)
-    summary_df.columns = summary_df.iloc[0];summary_df = summary_df.drop(0)
-    summary_df = summary_df.apply(pd.to_numeric, errors='ignore')
-    return summary_df,draft_outcomes
 """
 # Numba-accelerated function
 @njit
@@ -1112,6 +1234,7 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
         
     names_list = list(set(names_list))
     names_list.sort()
+    tot_len = len(names_list)
     #exceptions = list(set(names_list)-set(p_stats.player))
     #print("names not in player data")
     #print(exceptions)
@@ -1122,6 +1245,7 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
     if(print_val==0): p_stats = p_stats[(p_stats['season']<=year)]
     
     for p in names_list:#[['player','season']].values:
+        print(tot_len)
         df_name = p_stats[(p_stats['pid']==p)&(p_stats['season']<=year)]
         player_list = []; full_dist=[]; pteam = ''
         for x,y in df_name[['player','season']].values:
@@ -1150,6 +1274,7 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
         except IndexError:
             result
         #result.append(player_comp_analysis(x,y,p_stats,nba_stats_year.copy(),print_val))
+        tot_len -= 1
     
     result = pd.DataFrame(result)
     result.columns = result.iloc[0];result = result.drop(0)
@@ -1221,12 +1346,12 @@ nba_stats = extract_nba_stats(latest_season)
 
 #%% call the player comparision function
 
-#pcomps = player_comp_analysis("Unisa Turay", 2024, player_stats.copy(), nba_stats.copy(), 1)
+pcomps = player_comp_analysis("Dash Daniels", 2026, player_stats.copy(), nba_stats.copy(), 1)
 
-draft_list = mdist_list(2024, player_stats.copy(),0,1)
+#draft_list = mdist_list(2026, player_stats.copy(),0,1)
 
 #clustered_list = clustering(2016,2026)
 
-#model_summary = model_accuracy_measurement(nba_stats,2016,2025)
+#validation = model_accuracy_measurement(nba_stats,2016,2025)
 
 #train,test = regression_draft_model(nba_stats.copy(),data.copy(),player_stats.copy(),2019)
