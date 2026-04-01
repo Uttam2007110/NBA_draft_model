@@ -5,6 +5,7 @@ similarity tests for nba draft prospects based on NCAA stats
 @author: Subramanya.Ganti
 """
 #%% imports
+
 import numpy as np
 import pandas as pd
 
@@ -42,7 +43,7 @@ pd.set_option('mode.chained_assignment', None)
 path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
 #path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
-latest_season = 2026
+latest_season = 2018
 
 #%% team ratings
 def team_ratings():
@@ -119,7 +120,7 @@ def international_stats_adjustments():
     df = pd.read_excel(f'{path}/player/foreign_players.xlsx','final')
     df['TS%'] = df['TS%']*100
     
-    df['mp'] = 5 + 30.7*(df['mp'].rank(pct=True))
+    df['mp'] = 0 + 35.7*(df['mp'].rank(pct=True))
     df['usg'] = df['usg'] + 1.5
     df['AST%'] = df['AST%'] + 0.5
     df['TO%'] = df['TO%'] + 1.8
@@ -132,7 +133,7 @@ def international_stats_adjustments():
     df['BLK%'] = df['BLK%'] * (1.9/1.4)
     
     factor = 1.1
-    df['mp'] = df['mp'] * factor
+    #df['mp'] = df['mp'] * factor
     df['ORB%'] = df['ORB%'] * factor
     df['DRB%'] = df['DRB%'] * factor
     df['AST%'] = df['AST%'] * factor
@@ -215,7 +216,7 @@ def extract_player_stats():
             team_bs = team_bs.reset_index()
             data = data.merge(team_bs, left_on='team', right_on='team')
             
-            data = data.loc[(data['mp']>=10) & (data['GP']>=10)] #10, 10 is the default filter
+            data = data.loc[(data['mp']>=2) & (data['GP']>=2)] #10, 10 is the default filter
             data['blk_share'] = (data['blk']*40/data['mp'])/data['blocks_y']
             data['stl_share'] = (data['stl']*40/data['mp'])/data['steals_y']
             #data = df_class(data)
@@ -394,7 +395,7 @@ def mins_per_season(season):
     player_stats['season'] = season
     return player_stats
 
-#season_nba_mins = mins_per_season(latest_season)
+#season_nba_mins = mins_per_season(latest_season-1)
 
 #%% function to map nba stats
 def extract_nba_stats(year):
@@ -733,10 +734,10 @@ def skewed_normal_distributions(n_samples, off_mean, off_std, off_skew, off_kurt
     #print(def_mean, def_std, def_skew, def_kurt)
     #print(c)
     
-    try: off_a = minimize_scalar(skew_kurt_error, args=(off_skew, off_kurt), method='bounded', bounds=[-100, 100])
-    except: off_a = 100
-    try: def_a = minimize_scalar(skew_kurt_error, args=(def_skew, def_kurt), method='bounded', bounds=[-100, 100])
-    except: def_a = 100
+    try: off_a = minimize_scalar(skew_kurt_error, args=(off_skew*6, off_kurt), method='bounded', bounds=[-100, 100])
+    except: off_a = 10000
+    try: def_a = minimize_scalar(skew_kurt_error, args=(def_skew*3, def_kurt), method='bounded', bounds=[-100, 100])
+    except: def_a = 10000
         
     dist1 = stats.skewnorm(a=off_a.x, loc=off_mean, scale=off_std)
     dist2 = stats.skewnorm(a=def_a.x, loc=def_mean, scale=def_std)
@@ -889,12 +890,12 @@ def model_accuracy_measurement(stats_df,start,end):
     
     draft_outcomes = outcomes(stats_df)
     draft_outcomes = draft_outcomes.dropna()
-    observed_outcomes = [['year','bust rate','rotation rate','starter rate','all star rate','all nba rate','correlation']]
-    brier_scores = [['year','sample size','bust brier score','rotation brier score','starter brier score','all star brier score','all nba brier score']]
-    log_loss_score = [['year','sample size','bust log loss','rotation log loss','starter log loss','all star log loss','all nba log loss']]
-    roc_auc = [['year','sample size','bust roc auc','rotation roc auc','starter roc auc','all star roc auc','all nba roc auc']]
-    pr_auc = [['year','sample size','bust pr auc','rotation pr auc','starter pr auc','all star pr auc','all nba pr auc']]
-    pr_gain = [['year','sample size','bust pr gain','rotation pr gain','starter pr gain','all star pr gain','all nba pr gain']]
+    observed_outcomes = [['year','sample size','bust rate','rotation rate','starter rate','all star rate','all nba rate','mvp rate','correlation','model consensus top100 match']]
+    brier_scores = [['year','sample size','rotation brier score','starter brier score','all star brier score','all nba brier score']]
+    log_loss_score = [['year','sample size','rotation log loss','starter log loss','all star log loss','all nba log loss']]
+    roc_auc = [['year','sample size','rotation roc auc','starter roc auc','all star roc auc','all nba roc auc']]
+    pr_auc = [['year','sample size','rotation pr auc','starter pr auc','all star pr auc','all nba pr auc']]
+    pr_gain = [['year','sample size','rotation pr gain','starter pr gain','all star pr gain','all nba pr gain']]
     
     i = start
     while(i<=end):
@@ -917,42 +918,40 @@ def model_accuracy_measurement(stats_df,start,end):
         
         #check if this is needed
         #model_pred = model_pred[(model_pred['season_x']>=i)&(model_pred['season_x']<=i+1)]
+        try: allnba_log_loss = log_loss(model_pred['a_all nba'], model_pred['all nba'])
+        except ValueError: allnba_log_loss = 0
         
-        observed_outcomes.append([i,model_pred['bust'].sum()/len(model_pred),model_pred['rotation'].sum()/len(model_pred),
-                                  model_pred['starter'].sum()/len(model_pred),model_pred['all star'].sum()/len(model_pred),
-                                  model_pred['all nba'].sum()/len(model_pred),
-                                  model_pred['dpm'].corr(model_pred['median'])])
+        observed_outcomes.append([i,len(model_pred),
+                                  model_pred['a_bust'].sum()/len(model_pred),model_pred['a_rotation'].sum()/len(model_pred),
+                                  model_pred['a_starter'].sum()/len(model_pred),model_pred['a_all star'].sum()/len(model_pred),
+                                  model_pred['a_all nba'].sum()/len(model_pred),model_pred['a_mvp'].sum()/len(model_pred),
+                                  model_pred['dpm'].corr(model_pred['median']),model_pred.head(100)['consensus'].sum()])
         
         brier_scores.append([i,len(model_pred),
-                             brier_score_loss(model_pred['a_bust'], model_pred['bust']),
                              brier_score_loss(model_pred['a_rotation'], model_pred['rotation']),
                              brier_score_loss(model_pred['a_starter'], model_pred['starter']),
                              brier_score_loss(model_pred['a_all star'], model_pred['all star']),
                              brier_score_loss(model_pred['a_all nba'], model_pred['all nba'])])
            
         log_loss_score.append([i,len(model_pred),                  
-                             log_loss(model_pred['a_bust'], model_pred['bust']),
                              log_loss(model_pred['a_rotation'], model_pred['rotation']),
                              log_loss(model_pred['a_starter'], model_pred['starter']),
                              log_loss(model_pred['a_all star'], model_pred['all star']),
-                             log_loss(model_pred['a_all nba'], model_pred['all nba'])])
+                             allnba_log_loss])
         
         roc_auc.append([i,len(model_pred),                     
-                             roc_auc_score(model_pred['a_bust'], model_pred['bust'], average='weighted'),
                              roc_auc_score(model_pred['a_rotation'], model_pred['rotation'], average='weighted'),
                              roc_auc_score(model_pred['a_starter'], model_pred['starter'], average='weighted'),
                              roc_auc_score(model_pred['a_all star'], model_pred['all star'], average='weighted'),
                              roc_auc_score(model_pred['a_all nba'], model_pred['all nba'], average='weighted')])
         
         pr_auc.append([i,len(model_pred),                     
-                             average_precision_score(model_pred['a_bust'], model_pred['bust']),
                              average_precision_score(model_pred['a_rotation'], model_pred['rotation']),
                              average_precision_score(model_pred['a_starter'], model_pred['starter']),
                              average_precision_score(model_pred['a_all star'], model_pred['all star']),
                              average_precision_score(model_pred['a_all nba'], model_pred['all nba'])])
         
         pr_gain.append([i,len(model_pred),                     
-                             pr_gain_area(model_pred['a_bust'], model_pred['bust']),
                              pr_gain_area(model_pred['a_rotation'], model_pred['rotation']),
                              pr_gain_area(model_pred['a_starter'], model_pred['starter']),
                              pr_gain_area(model_pred['a_all star'], model_pred['all star']),
@@ -1047,7 +1046,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
         """
         
         tot_comps = len(dist)
-        w_nba = 1-np.tanh(2*nba_comps/tot_comps) 
+        w_nba = 1-np.tanh(0.5*nba_comps/tot_comps)
         
         comps_list = off_comps.to_list() + [-2.5] * int((tot_comps-nba_comps)*w_nba)
         comps_list.sort()
@@ -1185,7 +1184,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
         else:
             p_mins = p_mpp * min(p_gp,40) * 40 #p_mp
             #p_weight = np.tanh(p_mins * np.log(p_class+1)/800) * 10000
-            p_weight = (p_mins/3600) * (p_class) * 100000
+            p_weight = (p_mins/3600) * (p_class) * 20000 #100000 is the old value
             p_weight = np.ceil(p_weight).astype(int)
             
             #distribution_off = generate_fleishman_distribution(p_weight, mean_off, variance_off**0.5, skewness_off, kurtosis_off)            
@@ -1206,13 +1205,13 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
     
 def calculate_percentile(data_list, percentile): return np.percentile(data_list, percentile)
 
-def mdist_list(year, p_stats, print_val, get_seniors_stats):
+def mdist_list(year, p_stats, print_val, get_all_player_stats):
     start_time = datetime.now()
     nba_stats_year = extract_nba_stats(year)
     print()
     print(f"{year} nba stats extracted")
     
-    if(get_seniors_stats == 1):
+    if(get_all_player_stats == 1):
         p_stats['adj_rating'] = data['adj_rating']
         """
         seniors = p_stats[(p_stats['season']==year)&(p_stats['GP']>=10)&
@@ -1221,8 +1220,7 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
                           ((p_stats['mp']>=21) & (p_stats['bpm']>=3) & (p_stats['class']==3))|
                           ((p_stats['mp']>=24) & (p_stats['bpm']>=4) & (p_stats['class']==4)))]
         """
-        #seniors = p_stats[p_stats['pid'].isin([133778,78229])]
-        seniors = p_stats[(p_stats['season']==year)&(p_stats['GP']>=10)&(p_stats['mp']>=10)]
+        seniors = p_stats[(p_stats['season']==year)&(p_stats['GP']>=10)&(p_stats['mp']>=10)&(p_stats['bpm']>=-3)]
         names_list = seniors['pid'].to_list()
         p_stats = p_stats.drop(columns=['adj_rating'])
     else:
@@ -1234,7 +1232,6 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
         
     names_list = list(set(names_list))
     names_list.sort()
-    tot_len = len(names_list)
     #exceptions = list(set(names_list)-set(p_stats.player))
     #print("names not in player data")
     #print(exceptions)
@@ -1245,7 +1242,6 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
     if(print_val==0): p_stats = p_stats[(p_stats['season']<=year)]
     
     for p in names_list:#[['player','season']].values:
-        print(tot_len)
         df_name = p_stats[(p_stats['pid']==p)&(p_stats['season']<=year)]
         player_list = []; full_dist=[]; pteam = ''
         for x,y in df_name[['player','season']].values:
@@ -1274,7 +1270,6 @@ def mdist_list(year, p_stats, print_val, get_seniors_stats):
         except IndexError:
             result
         #result.append(player_comp_analysis(x,y,p_stats,nba_stats_year.copy(),print_val))
-        tot_len -= 1
     
     result = pd.DataFrame(result)
     result.columns = result.iloc[0];result = result.drop(0)
@@ -1346,9 +1341,9 @@ nba_stats = extract_nba_stats(latest_season)
 
 #%% call the player comparision function
 
-pcomps = player_comp_analysis("Dash Daniels", 2026, player_stats.copy(), nba_stats.copy(), 1)
+#pcomps = player_comp_analysis("AJ Dybantsa", 2026, player_stats.copy(), nba_stats.copy(), 1)
 
-#draft_list = mdist_list(2026, player_stats.copy(),0,1)
+draft_list = mdist_list(latest_season, player_stats.copy(),0,1)
 
 #clustered_list = clustering(2016,2026)
 
