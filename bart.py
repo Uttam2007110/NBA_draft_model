@@ -5,7 +5,6 @@ similarity tests for nba draft prospects based on NCAA stats
 @author: Subramanya.Ganti
 """
 #%% imports
-
 import numpy as np
 import pandas as pd
 
@@ -40,8 +39,8 @@ from pandas.errors import SettingWithCopyWarning
 warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 pd.set_option('mode.chained_assignment', None)
 
-path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
-#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
+#path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 latest_season = 2018
 
@@ -120,7 +119,7 @@ def international_stats_adjustments():
     df = pd.read_excel(f'{path}/player/foreign_players.xlsx','final')
     df['TS%'] = df['TS%']*100
     
-    df['mp'] = 0 + 35.7*(df['mp'].rank(pct=True))
+    df['mp'] = 5 + 30.7*(df['mp'].rank(pct=True))
     df['usg'] = df['usg'] + 1.5
     df['AST%'] = df['AST%'] + 0.5
     df['TO%'] = df['TO%'] + 1.8
@@ -227,20 +226,23 @@ def extract_player_stats():
             data['dunkar'] = data['dunkFGA']/(data['2PA']+data['3PA'])
             data['rimFGA'] = data['rimFGA'] - data['dunkFGA']
             data['rimFG'] = data['rimFG'] - data['dunkFG']
-            data['rim%'] = data['rimFG']/(data['rimFGA']+0.00000000000001)       
+            data['rim%'] = data['rimFG']/(data['rimFGA'])       
             data['rimar'] = data['rimFGA']/(data['2PA']+data['3PA'])
             data['midar'] = data['midFGA']/(data['2PA']+data['3PA'])
             data['3par'] = data['3PA']/(data['2PA']+data['3PA'])
             data['ftr'] = data['FTA']/(data['2PA']+data['3PA'])
-            
-            #data_adj['3P%'] = data_adj['3P%'].fillna(0)
-            #data_adj['mid%'] = data_adj['mid%'].fillna(0)
-            #data_adj['rim%'] = data_adj['rim%'].fillna(0)
-            #data_adj['dunk%'] = data_adj['dunk%'].fillna(0)
 
             data['2par'] = 1 - data['3par']
             data['2P%'] = (((data['TS%']/100) * (1+0.44*data['ftr']) * 2)-(data['ftr']*data['FT%'] + 3*data['3par']*data['3P%']))/(2*data['2par'])
             data['age'] = ((pd.to_datetime(f'{i}-11-01', format="%Y-%m-%d") - pd.to_datetime(pd.Series(data['dob']), format="%Y-%m-%d"))/ np.timedelta64(1, 'D'))/365
+            
+            data['dunkar'] = data['dunkar'].fillna(0)
+            data['3P%'] = data['3P%'].fillna(0)
+            data['mid%'] = data['mid%'].fillna(0)
+            data['rim%'] = data['rim%'].fillna(0)
+            #data['dunk%'] = data['dunk%'].fillna(0)
+            data['2par'] = data['2par'].fillna(0)
+            data['2P%'] = data['2P%'].fillna(0)
             
             data_adj = data[['player','pid','team','season','class','hgt','GP','mp','usg','TS%','ORB%','DRB%','AST%','TO%','ast/tov',
                              'BLK%','blk_share','STL%','stl_share','pfr','ftr','FT%','dunkar','rimar','rim%','midar','mid%',
@@ -314,9 +316,6 @@ player_stats = player_stats.merge(mapping, left_on='pid', right_on='pid', how='l
 player_stats['pid'] = player_stats['pid2'].fillna(player_stats['pid'])
 del player_stats['pid2']; del mapping
 
-#other corrections
-player_stats.loc[((player_stats['pid']==50678)&(player_stats['season']==2018)),'player'] = 'Ja Morant'
-player_stats.loc[(player_stats['pid']==-183444),'player'] = 'Johann Grünloh'
 #international players
 player_stats.loc[((player_stats['player']=='Dame Sarr')&(player_stats['pid']==-190807)),'pid'] = 133946
 player_stats.loc[((player_stats['player']=='Hannes Steinbach')&(player_stats['pid']==-218597)),'pid'] = 135114
@@ -325,7 +324,7 @@ player_stats.loc[((player_stats['player']=='Neoklis Avdalas')&(player_stats['pid
 player_stats.loc[((player_stats['player']=='Tomislav Ivisic')&(player_stats['pid']==-139509)),'pid'] = 127979
 player_stats.loc[((player_stats['player']=='Zvonimir Ivisic')&(player_stats['pid']==-139511)),'pid'] = 78304
 player_stats.loc[((player_stats['player']=='David Mirkovic')&(player_stats['pid']==-188962)),'pid'] = 135431
-player_stats.loc[((player_stats['player']=='Johann Grünloh')&(player_stats['pid']==-183444)),'pid'] = 135586
+player_stats.loc[((player_stats['player']=='Johann Gruenloh')&(player_stats['pid']==-183444)),'pid'] = 135586
 player_stats.loc[((player_stats['player']=='This De Ridder')&(player_stats['pid']==-139197)),'pid'] = 134573
 player_stats.loc[((player_stats['player']=='Ivan Kharchenkov')&(player_stats['pid']==-165587)),'pid'] = 133778
 player_stats.loc[((player_stats['player']=='Aday Mara Gomez')&(player_stats['pid']==-177830)),'pid'] = 78229
@@ -368,11 +367,6 @@ data = scaler.transform(data)
 data = pd.DataFrame(data, columns=correl_columns)
 
 correlation_matrix = data.corr()
-"""
-year_pivot = pd.pivot_table(player_stats,values=['class','hgt', 'GP', 'mp', 'usg','TS%', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 
-                                                 'BLK%', 'STL%', 'ftr','FT%', 'dunkar', 'rimar', 'rim%', 'midar', 'mid%', '3par', 
-                                                 '3P%','ORtg', 'drtg','bpm'],index=['season'],aggfunc='mean')
-"""
 
 #%% histogram of all player stats
 data.hist(figsize=(10, 8), bins=50)  # Adjust figsize as needed
@@ -636,12 +630,13 @@ def distance2(name, yr, full_matrix, data_copy, print_df):
     score_std = full_matrix[1:]['score'].std()
 
     full_matrix = full_matrix.head(100)
-    """    
-    copy = full_matrix.copy()
-    if(len(copy.loc[copy['score'] >= (score_mean + 5 * score_std)])<150):
-        full_matrix = full_matrix.head(150)
-    else:
-        full_matrix = full_matrix.loc[full_matrix['score'] >= (score_mean + 5 * score_std)] #4 or 3.75
+    #full_matrix = full_matrix.head(np.round(4*(yr-2001),0))  #does this make sense?
+    """
+    sample = full_matrix.loc[full_matrix['score'] >= (score_mean + 5 * score_std)] #4 or 3.75
+    #print(len(sample))
+    if(len(sample)<50): full_matrix = full_matrix.head(50)
+    elif(len(sample)>150): full_matrix = full_matrix.head(150)
+    else: full_matrix = sample #4 or 3.75
     """
     if(print_df == 0): full_matrix = full_matrix[(full_matrix['mdist']==0)|(~(full_matrix['pid'].isin(full_matrix.loc[full_matrix['season']>=yr,'pid'])))]
     #print(full_matrix[['player','team','season']].head(5))
@@ -725,24 +720,30 @@ def find_jf_params(target_mean, target_std, target_skew, target_kurt):
 def skewed_normal_distributions(n_samples, off_mean, off_std, off_skew, off_kurt, def_mean, def_std, def_skew, def_kurt, c):
     import scipy.stats as stats
     
-    if(off_skew == np.nan): off_skew = 0
-    if(off_kurt == np.nan): off_kurt = 0
-    if(def_skew == np.nan): def_skew = 0
-    if(def_kurt == np.nan): def_kurt = 0
+    if(np.isnan(off_skew)): off_skew = 1e-9
+    if(np.isnan(off_kurt)): off_kurt = 1e-9
+    if(np.isnan(def_skew)): def_skew = 1e-9
+    if(np.isnan(def_kurt)): def_kurt = 1e-9
+    if(np.isnan(c)): c = 0
     
     #print(off_mean, off_std, off_skew, off_kurt)
     #print(def_mean, def_std, def_skew, def_kurt)
     #print(c)
     
-    try: off_a = minimize_scalar(skew_kurt_error, args=(off_skew*6, off_kurt), method='bounded', bounds=[-100, 100])
-    except: off_a = 10000
-    try: def_a = minimize_scalar(skew_kurt_error, args=(def_skew*3, def_kurt), method='bounded', bounds=[-100, 100])
-    except: def_a = 10000
+    #artificially impose limits
+    if(c > 0.5): c = 0.5
+    if(c < -0.5): c = -0.5
+    if(off_kurt > 5): off_kurt = 5
+    if(def_kurt > 5): def_kurt = 5
+    
+    try: off_a = minimize_scalar(skew_kurt_error, args=(off_skew, off_kurt), method='bounded', bounds=[-1e10, 1e10])
+    except: off_a = 1e10
+    try: def_a = minimize_scalar(skew_kurt_error, args=(def_skew, def_kurt), method='bounded', bounds=[-1e10, 1e10])
+    except: def_a = 1e10
         
     dist1 = stats.skewnorm(a=off_a.x, loc=off_mean, scale=off_std)
     dist2 = stats.skewnorm(a=def_a.x, loc=def_mean, scale=def_std)
     
-    if(c > 0.5): c = 0.5
     cov_matrix = [[1, c],[c, 1]]
     """
     off_a,off_b,off_loc,off_scale = find_jf_params(off_mean,off_std,off_skew,off_kurt)
@@ -755,13 +756,18 @@ def skewed_normal_distributions(n_samples, off_mean, off_std, off_skew, off_kurt
     uniform_samples = stats.norm.cdf(norm_samples)
     
     var1 = dist1.ppf(uniform_samples[:, 0])
-    var1 = np.clip(var1, -2.5, 6)
     var2 = dist2.ppf(uniform_samples[:, 1])
+
+    var1 = (var1 - np.mean(var1)) * (1+0.2*off_kurt) + np.mean(var1)
+    var2 = (var2 - np.mean(var2)) * (1+0.1*def_kurt) + np.mean(var2)
+    
+    var1 = np.clip(var1, -2.5, 6)
     var2 = np.clip(var2, -1.5, 4)
     
     pdata = np.vstack((var1, var2)).T
     #['dpm'] = 
     pdata = 1*pdata[:, 0] + 1*pdata[:, 1]
+    pdata = np.nan_to_num(pdata, nan=-4) 
     return pdata
 
 def clustering(start_season,end_season):
@@ -992,7 +998,7 @@ def weighted_kurtosis(var, wts):
 def player_comp_analysis(x,year,p_stats,league_stats,print_val):
     try:
         dist = distance2(x, year, p_stats.copy(), data.copy(), print_val)
-        dist = dist.drop_duplicates(subset=['player'], keep='first')
+        #dist = dist.drop_duplicates(subset=['player'], keep='first')
         
         pid = dist['pid'].values[0]
         team = dist['team'].values[0]
@@ -1019,10 +1025,12 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
         off_comps = comps.groupby('player_name')['o_dpm'].apply(lambda x: x.nlargest(5))
         off_comps = off_comps.groupby(level=0).mean()
         off_comps = off_comps.dropna()
+        off_comps[off_comps < -2.5] = -2.5 #-3.5 old value
         
         def_comps = comps.groupby('player_name')['d_dpm'].apply(lambda x: x.nlargest(5))
         def_comps = def_comps.groupby(level=0).mean()
         def_comps = def_comps.dropna()
+        def_comps[def_comps < -1.5] = -1.5 #-2.5 old value
         
         """
         off_comps = comps.groupby(['pid','player_name'])['o_dpm'].apply(lambda x: x.nlargest(5))
@@ -1046,7 +1054,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
         """
         
         tot_comps = len(dist)
-        w_nba = 1-np.tanh(0.5*nba_comps/tot_comps)
+        w_nba = 1#-np.tanh(2*nba_comps/tot_comps) #2 originally, seems too high
         
         comps_list = off_comps.to_list() + [-2.5] * int((tot_comps-nba_comps)*w_nba)
         comps_list.sort()
@@ -1220,7 +1228,7 @@ def mdist_list(year, p_stats, print_val, get_all_player_stats):
                           ((p_stats['mp']>=21) & (p_stats['bpm']>=3) & (p_stats['class']==3))|
                           ((p_stats['mp']>=24) & (p_stats['bpm']>=4) & (p_stats['class']==4)))]
         """
-        seniors = p_stats[(p_stats['season']==year)&(p_stats['GP']>=10)&(p_stats['mp']>=10)&(p_stats['bpm']>=-3)]
+        seniors = p_stats[(p_stats['season']==year)&(p_stats['GP']>=10)&(p_stats['mp']>=20)&(p_stats['bpm']>=-3)]
         names_list = seniors['pid'].to_list()
         p_stats = p_stats.drop(columns=['adj_rating'])
     else:
@@ -1341,9 +1349,9 @@ nba_stats = extract_nba_stats(latest_season)
 
 #%% call the player comparision function
 
-#pcomps = player_comp_analysis("AJ Dybantsa", 2026, player_stats.copy(), nba_stats.copy(), 1)
+#pcomps = player_comp_analysis("Luka Doncic", 2018, player_stats.copy(), nba_stats.copy(), 1)
 
-draft_list = mdist_list(latest_season, player_stats.copy(),0,1)
+draft_list = mdist_list(latest_season, player_stats.copy(),0,0)
 
 #clustered_list = clustering(2016,2026)
 
