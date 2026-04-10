@@ -19,16 +19,18 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-start_season = 2026
+start_season = 2003
 end_season = 2026
+
+scrape_data = 0
 option = '' # G-League, NCAA, CBA, International is default
 
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
-path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
-#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
+#path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 #%% functions
 def league_mapping(option):
@@ -147,6 +149,7 @@ def derive_player_stats_league(code,league,season):
     advanced = extract_table_data(code,league,season,'Advanced_Stats','All')
     team = extract_table_data(code,league,season,'Totals','')
     team = team[['GP','MIN','STL','BLK','link_1']]
+    team['league'] = league
     if(code == -1): team['team_full'] = team['link_1'].str.split('/').str[3]
     else: team['team_full'] = team['link_1'].str.split('/').str[7]
     
@@ -177,13 +180,14 @@ def derive_player_stats_league(code,league,season):
     p_stats = p_stats.rename(columns={'Player': 'player', 'team_full': 'team', 'GP_x':'GP', 'USG%':'usg', 'TOV%':'TO%', 'DRtg':'drtg'})
     
     p_stats = p_stats[['player','pid','team','season','class','hgt','GP','mp','usg','TS%','ORB%','DRB%','AST%','TO%','ast/tov','BLK%','blk_share',
-                     'STL%','stl_share','pfr','ftr','FT%','dunkar','rimar','rim%','midar','mid%','3par','3P%','ORtg','drtg','bpm','link_1_x','MIN_x']]
+                     'STL%','stl_share','pfr','ftr','FT%','dunkar','rimar','rim%','midar','mid%','3par','3P%','ORtg','drtg','bpm','link_1_x','MIN_x','league']]
     return p_stats
 
 def aggregate_stats_seasons(code,league,i):
     concat_list = []; exceptions = []
     while(i<end_season+1):
         try:
+            print(code,league,i)
             player_stats = derive_player_stats_league(code,league,i)
             concat_list.append(player_stats)
         except:
@@ -198,24 +202,37 @@ def all_leagues_aggregate(start_season,option):
     full_aggregate = []; full_exceptions = []
     code = league_mapping(option)
     for x in code: 
-        print(x,code[x])
+        #print(x,code[x])
         league,exceptions = aggregate_stats_seasons(x,code[x],start_season)
         if(len(league) > 0): full_aggregate.append(league)
         full_exceptions.append(exceptions)
-        print(full_aggregate)
+        #print(full_aggregate)
     
     full_aggregate = pd.concat(full_aggregate)
     return full_aggregate,full_exceptions
 
 def pivot_data(df):
     df.reset_index(inplace = True)
+    
+    conversion_factors = pd.read_excel(f'{path}/nba_stats.xlsx','league conversions')
+    conversion_factors = conversion_factors.add_suffix('_f')
+    cols_to_subtract = conversion_factors.select_dtypes(include=['number']).columns
+    row_to_subtract = conversion_factors.loc[len(conversion_factors)-1, cols_to_subtract]
+    conversion_factors[cols_to_subtract] = np.exp(conversion_factors[cols_to_subtract].sub(row_to_subtract, axis=1).astype(float))
+    
+    df = df.merge(conversion_factors, left_on = ['league'], right_on = ['league_f'], how='left')
+    
+    for c in cols_to_subtract: 
+        #print(c,c.removesuffix("_f"))
+        df[f'{c.removesuffix("_f")}'] *= df[c]
+    
     pivot = df.pivot_table(values=['pid','class', 'hgt', 'mp', 'usg', 'TS%', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'BLK%', 'blk_share','STL%',
                                    'stl_share', 'pfr', 'ftr', 'FT%', 'dunkar', 'rimar', 'rim%','midar', 'mid%', '3par', '3P%','ORtg', 'drtg', 'bpm'],
                               index=['player','season','link_1_x'], 
                               aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'MIN_x']))
 
     gp = df.pivot_table(values=['GP'], index=['player','season','link_1_x'], aggfunc="sum")
-    team = df.pivot_table(values=['team'], index=['player','season','link_1_x'], aggfunc=lambda x: ' '.join(x.unique()))
+    team = df.pivot_table(values=['team'], index=['player','season','link_1_x'], aggfunc=lambda x: ', '.join(x.unique()))
 
     team = team.reset_index()
     gp = gp.reset_index()
@@ -256,10 +273,13 @@ def df_class(df):
     return df['class'].values
 
 #%% extract stats from real gm tables
-stats,errors = all_leagues_aggregate(start_season,option)
-stats[['ast/tov','blk_share','stl_share','pfr','ftr','3par']] = stats[['ast/tov','blk_share','stl_share','pfr','ftr','3par']].fillna(0)
-stats[['ast/tov','blk_share','stl_share','pfr','ftr']] = stats[['ast/tov','blk_share','stl_share','pfr','ftr']].replace(np.inf, 10)
-stats = stats[stats['MIN_x'] >= 1]
+if(scrape_data == 1):
+    stats,errors = all_leagues_aggregate(start_season,option)
+    stats[['ast/tov','blk_share','stl_share','pfr','ftr','3par']] = stats[['ast/tov','blk_share','stl_share','pfr','ftr','3par']].fillna(0)
+    stats[['ast/tov','blk_share','stl_share','pfr','ftr']] = stats[['ast/tov','blk_share','stl_share','pfr','ftr']].replace(np.inf, 10)
+    stats = stats[stats['MIN_x'] >= 1]
+else:
+    stats = pd.read_excel(f'{path}/player/foreign_players.xlsx','unadjusted')
 
 #%%convert stats into the desired format
 file0 = pivot_data(stats.copy())
@@ -267,10 +287,10 @@ file0 = pivot_data(stats.copy())
 file0 = file0.loc[(file0['mp']>=10) & (file0['GP']>=10)]
 
 #%% get the dob and height for the players
-bio = aggregate_age_dob(file0)
-
-#%% read excel file to get updated player bios
-bio = pd.read_excel(f'{path}/player/foreign_players.xlsx','bio')
+if(scrape_data == 1):
+    bio = aggregate_age_dob(file0)
+else:
+    bio = pd.read_excel(f'{path}/player/foreign_players.xlsx','bio')
 
 #%% merge age info with the stats and do final processing
 file0 = file0.merge(bio, left_on=['link_1_x'], right_on=['link_1_x'])
