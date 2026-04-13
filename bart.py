@@ -14,21 +14,20 @@ import scipy.stats
 from scipy.stats import norm
 from scipy.stats import skew
 from scipy.optimize import fsolve
-from scipy.spatial.distance import cdist
+#from scipy.spatial.distance import cdist
 from scipy.optimize import minimize_scalar
 from scipy.stats import jf_skew_t
 from scipy.optimize import minimize
+from scipy.stats import zscore
 
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
-#from sklearn.cluster import KMeans
-#from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
 from sklearn.preprocessing import RobustScaler
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import PercentFormatter
 
-#from numba import njit
 import requests
 from datetime import datetime
 
@@ -39,10 +38,10 @@ from pandas.errors import SettingWithCopyWarning
 warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 pd.set_option('mode.chained_assignment', None)
 
-#path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
-path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
+path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
-latest_season = 2018
+latest_season = 2026
 
 #%% team ratings
 def team_ratings():
@@ -118,7 +117,7 @@ def norm_inv_column(df,category):
 def international_stats_adjustments():
     df = pd.read_excel(f'{path}/player/foreign_players.xlsx','final')
     df['TS%'] = df['TS%']*100
-    
+    """
     df['mp'] = 5 + 30.7*(df['mp'].rank(pct=True))
     df['usg'] = df['usg'] + 1.5
     df['AST%'] = df['AST%'] + 0.5
@@ -130,8 +129,8 @@ def international_stats_adjustments():
     df['drtg'] = df['drtg'] - 7
     df['ORtg'] = df['ORtg'] - 2.5
     df['BLK%'] = df['BLK%'] * (1.9/1.4)
-    
-    factor = 1.1
+    """
+    factor = 1
     #df['mp'] = df['mp'] * factor
     df['ORB%'] = df['ORB%'] * factor
     df['DRB%'] = df['DRB%'] * factor
@@ -173,7 +172,7 @@ def bpm_estimate(df):
                 +0.599363695211862  * df['3P%'] + \
                 +0.236841287583253  * df['ORtg'] + \
                 -0.246965207036096  * df['drtg']
-    #df['bpm'] = np.nan
+    df['bpm'] = np.nan
     return df
 
 def height_estimate(df):
@@ -235,6 +234,9 @@ def extract_player_stats():
             data['2par'] = 1 - data['3par']
             data['2P%'] = (((data['TS%']/100) * (1+0.44*data['ftr']) * 2)-(data['ftr']*data['FT%'] + 3*data['3par']*data['3P%']))/(2*data['2par'])
             data['age'] = ((pd.to_datetime(f'{i}-11-01', format="%Y-%m-%d") - pd.to_datetime(pd.Series(data['dob']), format="%Y-%m-%d"))/ np.timedelta64(1, 'D'))/365
+            
+            #age corrections
+            data.loc[data['player']=='Allen Graves','age'] = (i-2026) + 20.276
             
             data['dunkar'] = data['dunkar'].fillna(0)
             data['3P%'] = data['3P%'].fillna(0)
@@ -736,13 +738,17 @@ def skewed_normal_distributions(n_samples, off_mean, off_std, off_skew, off_kurt
     if(off_kurt > 5): off_kurt = 5
     if(def_kurt > 5): def_kurt = 5
     
-    try: off_a = minimize_scalar(skew_kurt_error, args=(off_skew, off_kurt), method='bounded', bounds=[-1e10, 1e10])
-    except: off_a = 1e10
-    try: def_a = minimize_scalar(skew_kurt_error, args=(def_skew, def_kurt), method='bounded', bounds=[-1e10, 1e10])
-    except: def_a = 1e10
-        
-    dist1 = stats.skewnorm(a=off_a.x, loc=off_mean, scale=off_std)
-    dist2 = stats.skewnorm(a=def_a.x, loc=def_mean, scale=def_std)
+    try: 
+        #off_a = minimize_scalar(skew_kurt_error, args=(off_skew, off_kurt), method='bounded', bounds=[-1e10, 1e10])
+        off_a = get_a_from_skew(off_skew)
+    except: off_a = 0
+    try: 
+        #def_a = minimize_scalar(skew_kurt_error, args=(def_skew, def_kurt), method='bounded', bounds=[-1e10, 1e10])
+        def_a = get_a_from_skew(def_skew)
+    except: def_a = 0
+            
+    dist1 = stats.skewnorm(a=off_a, loc=off_mean, scale=off_std)
+    dist2 = stats.skewnorm(a=def_a, loc=def_mean, scale=def_std)
     
     cov_matrix = [[1, c],[c, 1]]
     """
@@ -759,7 +765,7 @@ def skewed_normal_distributions(n_samples, off_mean, off_std, off_skew, off_kurt
     var2 = dist2.ppf(uniform_samples[:, 1])
 
     var1 = (var1 - np.mean(var1)) * (1+0.2*off_kurt) + np.mean(var1)
-    var2 = (var2 - np.mean(var2)) * (1+0.1*def_kurt) + np.mean(var2)
+    var2 = (var2 - np.mean(var2)) * (1+0.2*def_kurt) + np.mean(var2)
     
     var1 = np.clip(var1, -2.5, 6)
     var2 = np.clip(var2, -1.5, 4)
@@ -770,37 +776,48 @@ def skewed_normal_distributions(n_samples, off_mean, off_std, off_skew, off_kurt
     pdata = np.nan_to_num(pdata, nan=-4) 
     return pdata
 
-def clustering(start_season,end_season):
+def clustering(start,end,n):
+    #features = ['median', '95th']
+    #features = ['p >= rotation', 'p >= starter', 'p >= all star', 'p >= all nba']
+    features = ['p >= rotation', 'p >= all star']
     
-    i = start_season; df_all = []
-    while(i<end_season+1):
-        df = pd.read_excel(f'{path}/results.xlsx',f'{i}')
-        first_column_name = df.columns[0]
-        df.drop(columns=[first_column_name], inplace=True)
-        df_all.append(df)
-        i += 1
+    i = start; df = []
+    while(i<end+1):
+        dfn = pd.read_excel(f'{path}/results.xlsx',f'{i}')
+        first_column_name = dfn.columns[0]
+        dfn.drop(columns=[first_column_name], inplace=True)
+        df.append(dfn)
+        i+=1
+    
+    df = pd.concat(df)
+    df.reset_index(drop=True, inplace=True)
+    
+    X = df[features]
+    X[features] = X[features].apply(zscore)
+    
+    kmeans = KMeans(n_clusters=n, init='k-means++', n_init=10) # 'k-means++' is a smart initialization method
+    kmeans.fit(X)
+    
+    centroids_sorted_idx = np.argsort(kmeans.cluster_centers_.mean(axis=1))[::-1]
+    relabel_map = np.zeros(kmeans.n_clusters, dtype=int)
+    for l, old_idx in enumerate(centroids_sorted_idx):
+        relabel_map[old_idx] = l
         
-    df_all = pd.concat(df_all)
-    df_all.reset_index(drop=True, inplace=True)
+    sorted_labels = relabel_map[kmeans.labels_]
+    df['Cluster'] = sorted_labels
     
-    centroids = pd.read_excel(f'{path}/results.xlsx','centroids')
-    centroids.drop(columns=['cluster'], inplace=True)
-    centroids = centroids[['5th','median','95th']]
+    df['Cluster'] = df['Cluster'].clip(lower=1)
+    df = df.drop(columns=['consensus'])
+    df = df.set_index('Cluster')
     
-    distances = cdist(df_all[['5th','median','95th']], centroids, metric='euclidean')
-    cluster_assignments = np.argmin(distances, axis=1)
-    df_all['cluster'] = cluster_assignments + 1
-    
-    i = start_season; df_final = []
-    while(i<end_season+1):
-        df = df_all[df_all['season'] == i]
-        df = df.drop_duplicates(subset=['player'], keep='first')
-        df = df.set_index('cluster')
-        df = df.drop(['consensus'],axis=1)
-        df_final.append(df)
-        i += 1
-    
-    return df_final
+    i = start; df_clustered = []
+    while(i<end+1):
+        dfn = df[df['season']==i]
+        df_clustered.append(dfn)
+        i+=1
+        
+    centroids_df = df.pivot_table(values=features,index='Cluster',aggfunc="mean")
+    return df_clustered, centroids_df
 
 def list_to_df(l):
     l = pd.DataFrame(l)
@@ -896,7 +913,9 @@ def model_accuracy_measurement(stats_df,start,end):
     
     draft_outcomes = outcomes(stats_df)
     draft_outcomes = draft_outcomes.dropna()
-    observed_outcomes = [['year','sample size','bust rate','rotation rate','starter rate','all star rate','all nba rate','mvp rate','correlation','model consensus top100 match']]
+    observed_outcomes = [['year','sample size','observed rotation','observed starter','observed all star','observed all nba','observed mvp',
+                          'model rotation','model starter','model all star','model all nba','model mvp']]
+    correlations = [['year','sample size','correlation','top100 match']]
     brier_scores = [['year','sample size','rotation brier score','starter brier score','all star brier score','all nba brier score']]
     log_loss_score = [['year','sample size','rotation log loss','starter log loss','all star log loss','all nba log loss']]
     roc_auc = [['year','sample size','rotation roc auc','starter roc auc','all star roc auc','all nba roc auc']]
@@ -906,17 +925,17 @@ def model_accuracy_measurement(stats_df,start,end):
     i = start
     while(i<=end):
         model_pred = pd.read_excel(f'{path}/results.xlsx',f'{i}')
-        model_pred['all nba'] += model_pred['mvp']
-        model_pred['all star'] += model_pred['all nba']
-        model_pred['starter'] += model_pred['all star']
-        model_pred['rotation'] = 1-model_pred['bust']
+        #model_pred['all nba'] += model_pred['mvp']
+        #model_pred['all star'] += model_pred['all nba']
+        #model_pred['starter'] += model_pred['all star']
+        #model_pred['rotation'] = 1-model_pred['bust']
         #model_pivot = model_pred.pivot_table(index='player',columns='season',values='median',aggfunc='mean')
         #draft_outcomes = draft_outcomes.merge(model_pivot, on='player', how='left')
         model_pred = model_pred.merge(draft_outcomes[['player','season_x','dpm']], on='player', how='left')
         model_pred['dpm'] = model_pred['dpm'].fillna(-4)
         model_pred['dpm'] = np.where(model_pred['season_x'] < i, -4, model_pred['dpm'])
-        model_pred['a_bust'] = np.where(model_pred['dpm'] <= -1, 1, 0)
-        model_pred['a_rotation'] = np.where((model_pred['dpm'] > -1), 1, 0) #& (model_pred['dpm'] <= 0)
+        #model_pred['a_bust'] = np.where(model_pred['dpm'] <= -1, 1, 0)
+        model_pred['a_rotation'] = np.where((model_pred['dpm'] > -1.5), 1, 0) #& (model_pred['dpm'] <= 0)
         model_pred['a_starter'] = np.where((model_pred['dpm'] > 0), 1, 0) #& (model_pred['dpm'] <= 1)
         model_pred['a_all star'] = np.where((model_pred['dpm'] > 1), 1, 0) #& (model_pred['dpm'] <= 2)
         model_pred['a_all nba'] = np.where((model_pred['dpm'] > 2), 1, 0) #& (model_pred['dpm'] <= 4.5)
@@ -924,65 +943,58 @@ def model_accuracy_measurement(stats_df,start,end):
         
         #check if this is needed
         #model_pred = model_pred[(model_pred['season_x']>=i)&(model_pred['season_x']<=i+1)]
-        try: allnba_log_loss = log_loss(model_pred['a_all nba'], model_pred['all nba'])
+        try: allnba_log_loss = log_loss(model_pred['a_all nba'], model_pred['p >= all nba'])
         except ValueError: allnba_log_loss = 0
         
         observed_outcomes.append([i,len(model_pred),
-                                  model_pred['a_bust'].sum()/len(model_pred),model_pred['a_rotation'].sum()/len(model_pred),
-                                  model_pred['a_starter'].sum()/len(model_pred),model_pred['a_all star'].sum()/len(model_pred),
-                                  model_pred['a_all nba'].sum()/len(model_pred),model_pred['a_mvp'].sum()/len(model_pred),
-                                  model_pred['dpm'].corr(model_pred['median']),model_pred.head(100)['consensus'].sum()])
+                                  model_pred['a_rotation'].sum(),model_pred['a_starter'].sum(),
+                                  model_pred['a_all star'].sum(),model_pred['a_all nba'].sum(),model_pred['a_mvp'].sum(),
+                                  model_pred['p >= rotation'].sum(),model_pred['p >= starter'].sum(),
+                                  model_pred['p >= all star'].sum(),model_pred['p >= all nba'].sum(),model_pred['p >= mvp'].sum()])
+        
+        correlations.append([i,len(model_pred),model_pred['dpm'].corr(model_pred['median']),model_pred.head(100)['consensus'].sum()])
         
         brier_scores.append([i,len(model_pred),
-                             brier_score_loss(model_pred['a_rotation'], model_pred['rotation']),
-                             brier_score_loss(model_pred['a_starter'], model_pred['starter']),
-                             brier_score_loss(model_pred['a_all star'], model_pred['all star']),
-                             brier_score_loss(model_pred['a_all nba'], model_pred['all nba'])])
+                             brier_score_loss(model_pred['a_rotation'], model_pred['p >= rotation']),
+                             brier_score_loss(model_pred['a_starter'], model_pred['p >= starter']),
+                             brier_score_loss(model_pred['a_all star'], model_pred['p >= all star']),
+                             brier_score_loss(model_pred['a_all nba'], model_pred['p >= all nba'])])
            
         log_loss_score.append([i,len(model_pred),                  
-                             log_loss(model_pred['a_rotation'], model_pred['rotation']),
-                             log_loss(model_pred['a_starter'], model_pred['starter']),
-                             log_loss(model_pred['a_all star'], model_pred['all star']),
+                             log_loss(model_pred['a_rotation'], model_pred['p >= rotation']),
+                             log_loss(model_pred['a_starter'], model_pred['p >= starter']),
+                             log_loss(model_pred['a_all star'], model_pred['p >= all star']),
                              allnba_log_loss])
         
         roc_auc.append([i,len(model_pred),                     
-                             roc_auc_score(model_pred['a_rotation'], model_pred['rotation'], average='weighted'),
-                             roc_auc_score(model_pred['a_starter'], model_pred['starter'], average='weighted'),
-                             roc_auc_score(model_pred['a_all star'], model_pred['all star'], average='weighted'),
-                             roc_auc_score(model_pred['a_all nba'], model_pred['all nba'], average='weighted')])
+                             roc_auc_score(model_pred['a_rotation'], model_pred['p >= rotation'], average='weighted'),
+                             roc_auc_score(model_pred['a_starter'], model_pred['p >= starter'], average='weighted'),
+                             roc_auc_score(model_pred['a_all star'], model_pred['p >= all star'], average='weighted'),
+                             roc_auc_score(model_pred['a_all nba'], model_pred['p >= all nba'], average='weighted')])
         
         pr_auc.append([i,len(model_pred),                     
-                             average_precision_score(model_pred['a_rotation'], model_pred['rotation']),
-                             average_precision_score(model_pred['a_starter'], model_pred['starter']),
-                             average_precision_score(model_pred['a_all star'], model_pred['all star']),
-                             average_precision_score(model_pred['a_all nba'], model_pred['all nba'])])
+                             average_precision_score(model_pred['a_rotation'], model_pred['p >= rotation']),
+                             average_precision_score(model_pred['a_starter'], model_pred['p >= starter']),
+                             average_precision_score(model_pred['a_all star'], model_pred['p >= all star']),
+                             average_precision_score(model_pred['a_all nba'], model_pred['p >= all nba'])])
         
         pr_gain.append([i,len(model_pred),                     
-                             pr_gain_area(model_pred['a_rotation'], model_pred['rotation']),
-                             pr_gain_area(model_pred['a_starter'], model_pred['starter']),
-                             pr_gain_area(model_pred['a_all star'], model_pred['all star']),
-                             pr_gain_area(model_pred['a_all nba'], model_pred['all nba'])])
+                             pr_gain_area(model_pred['a_rotation'], model_pred['p >= rotation']),
+                             pr_gain_area(model_pred['a_starter'], model_pred['p >= starter']),
+                             pr_gain_area(model_pred['a_all star'], model_pred['p >= all star']),
+                             pr_gain_area(model_pred['a_all nba'], model_pred['p >= all nba'])])
         
         i+=1
     
     observed_outcomes = list_to_df(observed_outcomes)
+    correlations = list_to_df(correlations)
     brier_scores = list_to_df(brier_scores)
     log_loss_score = list_to_df(log_loss_score)
     roc_auc = list_to_df(roc_auc)
     pr_auc = list_to_df(pr_auc)
     pr_gain = list_to_df(pr_gain)
-    return observed_outcomes,brier_scores,log_loss_score,roc_auc,pr_auc,pr_gain
+    return observed_outcomes,correlations,brier_scores,log_loss_score,roc_auc,pr_auc,pr_gain
     
-"""
-# Numba-accelerated function
-@njit
-def sum_of_unique_combinations(arr1, arr2):
-    result = []
-    for i in range(len(arr1)):
-        for j in range(len(arr2)):
-            result.append(arr1[i] + arr2[j])
-    return result
-"""
 def weighted_mean(var, wts):
     return np.average(var, weights=wts)
 
@@ -998,7 +1010,7 @@ def weighted_kurtosis(var, wts):
 def player_comp_analysis(x,year,p_stats,league_stats,print_val):
     try:
         dist = distance2(x, year, p_stats.copy(), data.copy(), print_val)
-        #dist = dist.drop_duplicates(subset=['player'], keep='first')
+        dist = dist.drop_duplicates(subset=['player'], keep='first')
         
         pid = dist['pid'].values[0]
         team = dist['team'].values[0]
@@ -1054,7 +1066,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
         """
         
         tot_comps = len(dist)
-        w_nba = 1#-np.tanh(2*nba_comps/tot_comps) #2 originally, seems too high
+        w_nba = 1#-np.tanh(0.4*nba_comps/tot_comps) #2 originally, seems too high
         
         comps_list = off_comps.to_list() + [-2.5] * int((tot_comps-nba_comps)*w_nba)
         comps_list.sort()
@@ -1228,7 +1240,7 @@ def mdist_list(year, p_stats, print_val, get_all_player_stats):
                           ((p_stats['mp']>=21) & (p_stats['bpm']>=3) & (p_stats['class']==3))|
                           ((p_stats['mp']>=24) & (p_stats['bpm']>=4) & (p_stats['class']==4)))]
         """
-        seniors = p_stats[(p_stats['season']==year)&(p_stats['GP']>=10)&(p_stats['mp']>=20)&(p_stats['bpm']>=-3)]
+        seniors = p_stats[(p_stats['season']==year)&(p_stats['GP']>=10)&(p_stats['mp']>=10)]
         names_list = seniors['pid'].to_list()
         p_stats = p_stats.drop(columns=['adj_rating'])
     else:
@@ -1322,16 +1334,16 @@ def mdist_list(year, p_stats, print_val, get_all_player_stats):
     print("all nba caliber players",round(pivot['all nba'].sum(),2))
     print("mvp claiber players",round(pivot['mvp'].sum(),2))
     print()
-    pivot['bust'] = 1 - pivot['rotation']
-    pivot['rotation'] = pivot['rotation'] - pivot['starter']
-    pivot['starter'] = pivot['starter'] - pivot['all star']
-    pivot['all star'] = pivot['all star'] - pivot['all nba']
-    pivot['all nba'] = pivot['all nba'] - pivot['mvp']
+    #pivot['bust'] = 1 - pivot['rotation']
+    #pivot['rotation'] = pivot['rotation'] - pivot['starter']
+    #pivot['starter'] = pivot['starter'] - pivot['all star']
+    #pivot['all star'] = pivot['all star'] - pivot['all nba']
+    #pivot['all nba'] = pivot['all nba'] - pivot['mvp']
     
     pivot['95th'] = round(pivot['95th'],2)
     pivot['median'] = round(pivot['median'],2)
     pivot['5th'] = round(pivot['5th'],2)
-    pivot['bust'] = round(pivot['bust'],3)
+    #pivot['bust'] = round(pivot['bust'],3)
     pivot['rotation'] = round(pivot['rotation'],3)
     pivot['starter'] = round(pivot['starter'],3)
     pivot['all star'] = round(pivot['all star'],3)
@@ -1339,7 +1351,8 @@ def mdist_list(year, p_stats, print_val, get_all_player_stats):
     pivot['mvp'] = round(pivot['mvp'],3)
     
     #pivot = pivot[pivot['bust']<1]    #check this
-    pivot = pivot[['player','team','age','season','bust','rotation','starter','all star','all nba','mvp','5th','median','95th']]
+    pivot = pivot[['player','team','age','season','rotation','starter','all star','all nba','mvp','5th','median','95th']]
+    pivot.columns = ['player','team','age','season','p >= rotation','p >= starter','p >= all star','p >= all nba','p >= mvp','5th','median','95th']
     print("total minutes for run",round((datetime.now()-start_time).total_seconds()/60,2))
     return pivot
 
@@ -1349,12 +1362,12 @@ nba_stats = extract_nba_stats(latest_season)
 
 #%% call the player comparision function
 
-#pcomps = player_comp_analysis("Luka Doncic", 2018, player_stats.copy(), nba_stats.copy(), 1)
+#pcomps = player_comp_analysis("Allen Graves", 2026, player_stats.copy(), nba_stats.copy(), 1)
 
-draft_list = mdist_list(latest_season, player_stats.copy(),0,0)
+#draft_list = mdist_list(latest_season, player_stats.copy(),0,1)
 
-#clustered_list = clustering(2016,2026)
+#clustered_list = clustering(2016,2026,9)
 
-#validation = model_accuracy_measurement(nba_stats,2016,2025)
+validation = model_accuracy_measurement(nba_stats,2016,2025)
 
 #train,test = regression_draft_model(nba_stats.copy(),data.copy(),player_stats.copy(),2019)
