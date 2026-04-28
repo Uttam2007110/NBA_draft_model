@@ -41,7 +41,7 @@ pd.set_option('mode.chained_assignment', None)
 path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
 #path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
-latest_season = 2026
+latest_season = 2025
 
 #%% team ratings
 def team_ratings():
@@ -403,7 +403,9 @@ def extract_nba_stats(year):
     mins = pd.read_excel(f'{path}/nba_stats.xlsx','mins')
     mins['season'] = mins['season'] + 1
     nba_stats_y = pd.merge(nba_stats_y, mins[['RowId','season','Minutes']], left_on=['nba_id','season_x'], right_on=['RowId','season'], how='left')
-    #nba_stats_y['Minutes'] = nba_stats_y['Minutes'].fillna(25)
+    #impute values for missing seasons and put lower threshold to 1
+    nba_stats_y['Minutes'] = nba_stats_y['Minutes'].fillna(92*nba_stats_y['age']-1.4*nba_stats_y['age']*nba_stats_y['age']+327*nba_stats_y['o_dpm']+89*nba_stats_y['d_dpm'])
+    nba_stats_y['Minutes'] = nba_stats_y['Minutes'].clip(lower=1)
     #Padding for the DARKO values
     mins = pd.pivot_table(mins,index='season',values='Minutes',aggfunc='mean')
     mins['Minutes'] /= 4
@@ -765,7 +767,7 @@ def skewed_normal_distributions(n_samples, off_mean, off_std, off_skew, off_kurt
     var2 = dist2.ppf(uniform_samples[:, 1])
 
     var1 = (var1 - np.mean(var1)) * (1+0.2*off_kurt) + np.mean(var1)
-    var2 = (var2 - np.mean(var2)) * (1+0.2*def_kurt) + np.mean(var2)
+    var2 = (var2 - np.mean(var2)) * (1+0.1*def_kurt) + np.mean(var2)
     
     var1 = np.clip(var1, -2.5, 6)
     var2 = np.clip(var2, -1.5, 4)
@@ -913,8 +915,8 @@ def model_accuracy_measurement(stats_df,start,end):
     
     draft_outcomes = outcomes(stats_df)
     draft_outcomes = draft_outcomes.dropna()
-    observed_outcomes = [['year','sample size','observed rotation','observed starter','observed all star','observed all nba','observed mvp',
-                          'model rotation','model starter','model all star','model all nba','model mvp']]
+    observed_outcomes = [['year','sample size','observed rotation','observed starter','observed all star','observed all nba',
+                          'observed mvp', 'model rotation','model starter','model all star','model all nba','model mvp']]
     correlations = [['year','sample size','correlation','top100 match']]
     brier_scores = [['year','sample size','rotation brier score','starter brier score','all star brier score','all nba brier score']]
     log_loss_score = [['year','sample size','rotation log loss','starter log loss','all star log loss','all nba log loss']]
@@ -929,20 +931,19 @@ def model_accuracy_measurement(stats_df,start,end):
         #model_pred['all star'] += model_pred['all nba']
         #model_pred['starter'] += model_pred['all star']
         #model_pred['rotation'] = 1-model_pred['bust']
-        #model_pivot = model_pred.pivot_table(index='player',columns='season',values='median',aggfunc='mean')
-        #draft_outcomes = draft_outcomes.merge(model_pivot, on='player', how='left')
-        model_pred = model_pred.merge(draft_outcomes[['player','season_x','dpm']], on='player', how='left')
+        model_pred = model_pred.merge(draft_outcomes[['pid','season_x','dpm']], on='pid', how='left')
         model_pred['dpm'] = model_pred['dpm'].fillna(-4)
-        model_pred['dpm'] = np.where(model_pred['season_x'] < i, -4, model_pred['dpm'])
+        #model_pred['dpm'] = np.where(model_pred['season_x'] < i, -4, model_pred['dpm'])
         #model_pred['a_bust'] = np.where(model_pred['dpm'] <= -1, 1, 0)
-        model_pred['a_rotation'] = np.where((model_pred['dpm'] > -1.5), 1, 0) #& (model_pred['dpm'] <= 0)
+        model_pred['a_rotation'] = np.where((model_pred['dpm'] > -1), 1, 0) #& (model_pred['dpm'] <= 0)
         model_pred['a_starter'] = np.where((model_pred['dpm'] > 0), 1, 0) #& (model_pred['dpm'] <= 1)
         model_pred['a_all star'] = np.where((model_pred['dpm'] > 1), 1, 0) #& (model_pred['dpm'] <= 2)
         model_pred['a_all nba'] = np.where((model_pred['dpm'] > 2), 1, 0) #& (model_pred['dpm'] <= 4.5)
         model_pred['a_mvp'] = np.where(model_pred['dpm'] > 4.5, 1, 0)
+        model_pred = model_pred.drop_duplicates(subset='pid')
         
         #check if this is needed
-        #model_pred = model_pred[(model_pred['season_x']>=i)&(model_pred['season_x']<=i+1)]
+        #model_pred = model_pred[(model_pred['season_x']==i)]
         try: allnba_log_loss = log_loss(model_pred['a_all nba'], model_pred['p >= all nba'])
         except ValueError: allnba_log_loss = 0
         
@@ -952,7 +953,7 @@ def model_accuracy_measurement(stats_df,start,end):
                                   model_pred['p >= rotation'].sum(),model_pred['p >= starter'].sum(),
                                   model_pred['p >= all star'].sum(),model_pred['p >= all nba'].sum(),model_pred['p >= mvp'].sum()])
         
-        correlations.append([i,len(model_pred),model_pred['dpm'].corr(model_pred['median']),model_pred.head(100)['consensus'].sum()])
+        correlations.append([i,len(model_pred),model_pred['dpm'].corr(model_pred['mean DARKO']),model_pred.head(100)['consensus'].sum()])
         
         brier_scores.append([i,len(model_pred),
                              brier_score_loss(model_pred['a_rotation'], model_pred['p >= rotation']),
@@ -1092,7 +1093,6 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
             #distribution = sum_of_unique_combinations(distribution_off,distribution_def)
             distribution = skewed_normal_distributions(samples, mean_off, variance_off**0.5, skewness_off, kurtosis_off, mean, variance**0.5, skewness, kurtosis, cor)
             #print(distribution)
-            comps_num = len(dist)
             #bpm_gap = stats.percentileofscore(dist['bpm'].to_list(), bpm)
             
             bench = np.sum(np.array(distribution) >= -1)/(samples) #0, -1.75
@@ -1101,48 +1101,14 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
             allnba = np.sum(np.array(distribution) >= 2)/(samples) #4, 1.5
             mvp = np.sum(np.array(distribution) >= 4.5)/(samples) #7.5, 3.75
             
-            p_25 = round(np.percentile(distribution, 5),2) #4
+            p_5 = round(np.percentile(distribution, 5),2) #4
             p_50 = round(np.percentile(distribution, 50),2) #4
-            p_90 = round(np.percentile(distribution, 95),2) #4
-            
-            dist2 = league_stats[league_stats['pid'].isin(dist['pid'])]
-            #new line
-            dist2['dpm'] = 1*dist2['o_dpm'] + 1*dist2['d_dpm']
-            dist2 = pd.pivot_table(dist2,values=['dpm'],index=['player_name'],columns=['season_x'],aggfunc=np.sum)
-            dist2.columns = dist2.columns.droplevel(0)
-            dist2['VORP/S'] =  dist2.max(axis=1, numeric_only=True)
-            dist2['S'] =  dist2.count(axis=1, numeric_only=True)
-            dist2['S'] -= 1
-            dist2.reset_index(inplace=True)
-            dist2 = dist2[['player_name','VORP/S','S']]
-            
-            dist2 = dist2.merge(dist[['player','hgt_pct','bpm_pct']], left_on=['player_name'], right_on=['player'])
-            dist2['VORP/S_pct'] = np.abs(dist2['VORP/S']).rank(pct=True)
-            dist2['composite'] = (dist2['bpm_pct'])*(dist2['VORP/S'])
-            dist2 = dist2.loc[dist2['S'] > 1]
-            
-            v1 = min(math.ceil(0.05*len(dist2)),len(dist2)-1)
-            v2 = max(math.ceil(0.15*len(dist2)),v1+1)
-            v3 = max(math.ceil(0.4*len(dist2)),v2+1)
-            
-            try : c1 = dist2.loc[dist2['composite'] == dist2['composite'].nlargest(v1)[-1:].values[0],'player_name'].values[0] 
-            except: c1 = ""
-            try: c2 = dist2.loc[dist2['composite'] == dist2['composite'].nlargest(v2)[-1:].values[0],'player_name'].values[0]
-            except : c2 = ""
-            try: c3 = dist2.loc[dist2['composite'] == dist2['composite'].nlargest(v3)[-1:].values[0],'player_name'].values[0]
-            except : c3 = ""
-            
+            meand = round(np.mean(distribution),2) #4
+            p_95 = round(np.percentile(distribution, 95),2) #4
+                        
             #plot of histogram
-            #plt.hist(distribution_off, bins = 200 ,edgecolor='red') # 'bins' controls the number of bins, 'edgecolor' adds a border
-            #plt.hist(distribution_def, bins = 200 ,edgecolor='blue') # 'bins' controls the number of bins, 'edgecolor' adds a border
-            plt.hist(distribution, bins = 50, edgecolor='green') # 'bins' controls the number of bins, 'edgecolor' adds a border
+            plt.hist(distribution, bins = 200, edgecolor='green') # 'bins' controls the number of bins, 'edgecolor' adds a border
             plt.gca().yaxis.set_major_formatter(PercentFormatter((samples*samples)))
-            
-            # Create Pearson distribution with given skew
-            #from scipy.stats import pearson3
-            #from scipy.stats import johnsonsu
-            #a, b, loc, scale = johnsonsu.fit(distribution)
-            #dist = johnsonsu(a, b, loc=loc, scale=scale)
 
             # Best-fit curve
             plt.xlim(-4, 6)
@@ -1186,9 +1152,10 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
             #print("skew - ",skewness)
             #print("kurt - ",kurtosis)
             print()
-            print("5th DARKO",p_25)
+            print("P5 DARKO",p_5)
             print("median DARKO",p_50)
-            print("95th DARKO",p_90)
+            print("mean DARKO",meand)
+            print("P95 DARKO",p_95)
             
             off_comps = comps.groupby(['pid','player_name'])['o_dpm'].apply(lambda x: x.nlargest(5))
             off_comps = off_comps.groupby(level=0).mean()
@@ -1204,7 +1171,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
         else:
             p_mins = p_mpp * min(p_gp,40) * 40 #p_mp
             #p_weight = np.tanh(p_mins * np.log(p_class+1)/800) * 10000
-            p_weight = (p_mins/3600) * (p_class) * 20000 #100000 is the old value
+            p_weight = (p_mins/3600) * (p_class) * 10000 #100000 is the old value
             p_weight = np.ceil(p_weight).astype(int)
             
             #distribution_off = generate_fleishman_distribution(p_weight, mean_off, variance_off**0.5, skewness_off, kurtosis_off)            
@@ -1212,16 +1179,17 @@ def player_comp_analysis(x,year,p_stats,league_stats,print_val):
             #distribution = sum_of_unique_combinations(distribution_off,distribution_def)
             distribution = skewed_normal_distributions(p_weight, mean_off, variance_off**0.5, skewness_off, kurtosis_off, mean, variance**0.5, skewness, kurtosis, cor)
                         
-            p_25 = round(np.percentile(distribution, 5),2) #4
+            p_5 = round(np.percentile(distribution, 5),2) #4
             p_50 = round(np.percentile(distribution, 50),2) #4
-            p_90 = round(np.percentile(distribution, 95),2) #4
-            print(x,year,p_25,p_50,p_90,p_weight)
+            meand = round(np.mean(distribution),2) #4
+            p_95 = round(np.percentile(distribution, 95),2) #4
+            print(x,year,meand)
             
-            return [x, pid, team, p_class, p_age, year, p_weight, distribution]
+            return [x, pid, team, p_class, p_age, year, p_weight, distribution, pid]
         
     except:
         print(f"*******error with {x} {year}*******")
-        if(print_val == 0): return [x, 0,"NA", 0, 0, year, 0, []]        
+        if(print_val == 0): return [x, 0,"NA", 0, 0, year, 0, [], 0]        
     
 def calculate_percentile(data_list, percentile): return np.percentile(data_list, percentile)
 
@@ -1240,7 +1208,7 @@ def mdist_list(year, p_stats, print_val, get_all_player_stats):
                           ((p_stats['mp']>=21) & (p_stats['bpm']>=3) & (p_stats['class']==3))|
                           ((p_stats['mp']>=24) & (p_stats['bpm']>=4) & (p_stats['class']==4)))]
         """
-        seniors = p_stats[(p_stats['season']==year)&(p_stats['GP']>=10)&(p_stats['mp']>=10)]
+        seniors = p_stats[(p_stats['season']==year)&(p_stats['GP']>=2)&(p_stats['mp']>=2)]
         names_list = seniors['pid'].to_list()
         p_stats = p_stats.drop(columns=['adj_rating'])
     else:
@@ -1256,12 +1224,14 @@ def mdist_list(year, p_stats, print_val, get_all_player_stats):
     #print("names not in player data")
     #print(exceptions)
     print()
+    tot_len = len(names_list)
     
     #result = [['player','pid','team','class','age','season','weight','distribution']]
-    result = [['player','team','class','age','season','rotation','starter','all star','all nba','mvp','5th','median','95th']]
+    result = [['pid','player','team','class','age','season','rotation','starter','all star','all nba','mvp','P5 DARKO','P50 DARKO','P95 DARKO','mean DARKO']]
     if(print_val==0): p_stats = p_stats[(p_stats['season']<=year)]
     
     for p in names_list:#[['player','season']].values:
+        print(tot_len)
         df_name = p_stats[(p_stats['pid']==p)&(p_stats['season']<=year)]
         player_list = []; full_dist=[]; pteam = ''
         for x,y in df_name[['player','season']].values:
@@ -1271,6 +1241,7 @@ def mdist_list(year, p_stats, print_val, get_all_player_stats):
             pclass = player_list[3]
             page = player_list[4]
             pseason = player_list[5]
+            ppid = player_list[8]
             try: full_dist = full_dist + player_list[7].tolist()
             except AttributeError: full_dist
             
@@ -1282,14 +1253,16 @@ def mdist_list(year, p_stats, print_val, get_all_player_stats):
             pallstar = np.sum(np.array(full_dist) >= 1)/(len_dist) #2.5, 0.75
             pallnba = np.sum(np.array(full_dist) >= 2)/(len_dist) #4, 1.5
             pmvp = np.sum(np.array(full_dist) >= 4.5)/(len_dist) #7.5, 3.75
-            p_25 = round(np.percentile(full_dist, 5),2) #4
+            p_5 = round(np.percentile(full_dist, 5),2) #4
             p_50 = round(np.percentile(full_dist, 50),2) #4
-            p_90 = round(np.percentile(full_dist, 95),2) #4
-            
-            result.append([x,pteam,pclass,page,pseason,pbench,pstarter,pallstar,pallnba,pmvp,p_25,p_50,p_90])
+            meand = round(np.mean(full_dist),2) #4
+            p_95 = round(np.percentile(full_dist, 95),2) #4
+            # display mean or median?
+            result.append([ppid,x,pteam,pclass,page,pseason,pbench,pstarter,pallstar,pallnba,pmvp,p_5,p_50,p_95,meand])
         except IndexError:
             result
         #result.append(player_comp_analysis(x,y,p_stats,nba_stats_year.copy(),print_val))
+        tot_len -= 1
     
     result = pd.DataFrame(result)
     result.columns = result.iloc[0];result = result.drop(0)
@@ -1340,9 +1313,10 @@ def mdist_list(year, p_stats, print_val, get_all_player_stats):
     #pivot['all star'] = pivot['all star'] - pivot['all nba']
     #pivot['all nba'] = pivot['all nba'] - pivot['mvp']
     
-    pivot['95th'] = round(pivot['95th'],2)
-    pivot['median'] = round(pivot['median'],2)
-    pivot['5th'] = round(pivot['5th'],2)
+    pivot['P5 DARKO'] = round(pivot['P5 DARKO'],2)
+    pivot['P50 DARKO'] = round(pivot['P50 DARKO'],2)
+    pivot['P95 DARKO'] = round(pivot['P95 DARKO'],2)
+    pivot['mean DARKO'] = round(pivot['mean DARKO'],2)
     #pivot['bust'] = round(pivot['bust'],3)
     pivot['rotation'] = round(pivot['rotation'],3)
     pivot['starter'] = round(pivot['starter'],3)
@@ -1351,8 +1325,10 @@ def mdist_list(year, p_stats, print_val, get_all_player_stats):
     pivot['mvp'] = round(pivot['mvp'],3)
     
     #pivot = pivot[pivot['bust']<1]    #check this
-    pivot = pivot[['player','team','age','season','rotation','starter','all star','all nba','mvp','5th','median','95th']]
-    pivot.columns = ['player','team','age','season','p >= rotation','p >= starter','p >= all star','p >= all nba','p >= mvp','5th','median','95th']
+    pivot = pivot[['pid','player','team','age','season','mean DARKO','rotation','starter','all star','all nba','mvp','P5 DARKO','P50 DARKO','P95 DARKO']]
+    pivot.columns = ['pid','player','team','age','season','mean DARKO','p >= rotation','p >= starter','p >= all star','p >= all nba','p >= mvp','P5 DARKO','P50 DARKO','P95 DARKO']
+    pivot = pivot.drop_duplicates(subset='pid')
+    pivot = pivot.set_index('pid')
     print("total minutes for run",round((datetime.now()-start_time).total_seconds()/60,2))
     return pivot
 
@@ -1362,12 +1338,12 @@ nba_stats = extract_nba_stats(latest_season)
 
 #%% call the player comparision function
 
-#pcomps = player_comp_analysis("Allen Graves", 2026, player_stats.copy(), nba_stats.copy(), 1)
+#pcomps = player_comp_analysis("Darryn Peterson", 2026, player_stats.copy(), nba_stats.copy(), 1)
 
-#draft_list = mdist_list(latest_season, player_stats.copy(),0,1)
+draft_list = mdist_list(latest_season, player_stats.copy(),0,0)
 
 #clustered_list = clustering(2016,2026,9)
 
-validation = model_accuracy_measurement(nba_stats,2016,2025)
+#validation = model_accuracy_measurement(nba_stats,2016,2025)
 
 #train,test = regression_draft_model(nba_stats.copy(),data.copy(),player_stats.copy(),2019)
