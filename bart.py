@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
+#%% imports
 """
 Created on Fri May 16 12:32:18 2025
 similarity tests for nba draft prospects based on NCAA stats
 @author: Subramanya.Ganti
 """
-#%% imports
+
 import numpy as np
 import pandas as pd
 
@@ -37,10 +37,11 @@ from pandas.errors import SettingWithCopyWarning
 warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 pd.set_option('mode.chained_assignment', None)
 
-path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
-#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
+#path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
-latest_season = 2024
+#%% choose season to run
+latest_season = 2020
 
 #%% team ratings
 def team_ratings():
@@ -93,6 +94,35 @@ def df_role(df):
     df['role'] = df['role'].map(mapping)
     #df = df[df['role'].notna()]
     return df
+
+def df_role2(df):    
+    import xgboost as xgb
+  
+    # Load models
+    xgb_guard = xgb.XGBRegressor()
+    xgb_wing  = xgb.XGBRegressor()
+    xgb_center = xgb.XGBRegressor()
+    
+    xgb_guard.load_model(f"{path}/xgb_guard.json")
+    xgb_wing.load_model(f"{path}/xgb_wing.json")
+    xgb_center.load_model(f"{path}/xgb_center.json")
+
+    X = df[['hgt','AST%','ORB%','DRB%','blk_share','stl_share','3par']].values
+    
+    def softmax(z):
+        z = z - z.max(axis=1, keepdims=True)  # numerical stability
+        exp_z = np.exp(z)
+        return exp_z / exp_z.sum(axis=1, keepdims=True)
+
+    raw_scores = np.column_stack([
+        xgb_guard.predict(X),
+        xgb_wing.predict(X),
+        xgb_center.predict(X)
+    ])
+
+    probs = softmax(raw_scores)
+    #df[["guard", "wing", "center"]] = probs
+    return probs
 
 def height_adj(df):
     df[['Feet', 'Inches']] = df['height'].str.split('-', expand=True)
@@ -298,6 +328,13 @@ def extract_player_stats():
         data_adj['3prof'] = data_adj['3P%']*(2/(1+np.exp(-4*data_adj['3par']))-1)
         data_adj['rimprof'] = data_adj['rim%']*(2/(1+np.exp(-4*data_adj['rimar']))-1)
         data_adj['midprof'] = data_adj['mid%']*(2/(1+np.exp(-4*data_adj['midar']))-1)
+        
+        #regression to the mean
+        num_cols = ['usg','TS%','ORB%','DRB%','AST%','TO%','ast/tov','BLK%','blk_share','STL%','stl_share','pfr','ftr','FT%',
+                    'dunkar','rimar','rim%','midar','mid%','3par','3P%','ORtg','drtg','bpm','2par','2P%']
+        replacement_level = data_adj[num_cols].select_dtypes(include="number").quantile(0.25)
+        data_adj[num_cols] = (data_adj[num_cols].mul(data_adj['mp']*data_adj['GP'], axis=0).add(replacement_level * 50)).div(data_adj['mp']*data_adj['GP'] + 50, axis=0)
+        
         unadj_p_stats.append(data_adj.copy())
         
         for x in ['ORB%','DRB%','BLK%','blk_share','STL%','stl_share','AST%','TO%','ast/tov']:
@@ -388,6 +425,9 @@ correl_columns = ['age','class','hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'as
 data = data[correl_columns]
 data = data_imputation_08_09(data.copy())
 
+data[['guard','wing','center']] = df_role2(player_stats)
+correl_columns += ['guard','wing','center']
+
 scaler = RobustScaler()
 scaler.fit(data)
 data = scaler.transform(data)
@@ -410,7 +450,7 @@ def get_analytical_weights(X):
     optimal_weights[20] = 1.25
     
     #v3, after grid search on a limited set
-    optimal_weights = [1,1.15,0.9,1,0.95,1,1,1.05,0.95,1.05,1,1,0.9,1,1,1,1,1,0.9,1,1.25,1,0.85,1.05,1.1]
+    optimal_weights = [1,1.15,0.9,1,0.95,1,1,1.05,0.95,1.05,1,1,0.9,1,1,1,1,1,0.9,1,1.25,1,0.85,1.05,1.1, 1,1,1] #positions added
 
     return np.array(optimal_weights)
 
@@ -463,9 +503,11 @@ def extract_nba_stats(year):
     mins = pd.read_excel(f'{path}/nba_stats.xlsx','mins')
     mins['season'] = mins['season'] + 1
     nba_stats_y = pd.merge(nba_stats_y, mins[['RowId','season','Minutes']], left_on=['nba_id','season_x'], right_on=['RowId','season'], how='left')
+    
     #impute values for missing seasons and put lower threshold to 1
-    nba_stats_y['Minutes'] = nba_stats_y['Minutes'].fillna(92*nba_stats_y['age']-1.4*nba_stats_y['age']*nba_stats_y['age']+327*nba_stats_y['o_dpm']+89*nba_stats_y['d_dpm'])
-    nba_stats_y['Minutes'] = nba_stats_y['Minutes'].clip(lower=1)
+    #nba_stats_y['Minutes'] = nba_stats_y['Minutes'].fillna(92*nba_stats_y['age']-1.4*nba_stats_y['age']*nba_stats_y['age']+327*nba_stats_y['o_dpm']+89*nba_stats_y['d_dpm'])
+    #nba_stats_y['Minutes'] = nba_stats_y['Minutes'].clip(lower=1)
+    
     #Padding for the DARKO values
     mins = pd.pivot_table(mins,index='season',values='Minutes',aggfunc='mean')
     mins['Minutes'] /= 4
@@ -474,8 +516,8 @@ def extract_nba_stats(year):
     mins.columns = ['season_avg','th']
     nba_stats_y = pd.merge(nba_stats_y, mins, left_on=['season_x'], right_on=['season_avg'], how='left')
     
-    nba_stats_y['o_dpm'] = (nba_stats_y['o_dpm'] * nba_stats_y['Minutes'] + -3 * nba_stats_y['th'])/(nba_stats_y['Minutes'] + nba_stats_y['th']) #-2.5
-    nba_stats_y['d_dpm'] = (nba_stats_y['d_dpm'] * nba_stats_y['Minutes'] + -2 * nba_stats_y['th'])/(nba_stats_y['Minutes'] + nba_stats_y['th']) #-1.5
+    #nba_stats_y['o_dpm'] = (nba_stats_y['o_dpm'] * nba_stats_y['Minutes'] + -3 * nba_stats_y['th'])/(nba_stats_y['Minutes'] + nba_stats_y['th']) #-2.5
+    #nba_stats_y['d_dpm'] = (nba_stats_y['d_dpm'] * nba_stats_y['Minutes'] + -2 * nba_stats_y['th'])/(nba_stats_y['Minutes'] + nba_stats_y['th']) #-1.5
     
     nba_stats_y['age_adj'] = nba_stats_y['age'].round()
     #nba_stats_y = nba_stats_y[['player_name','season_x','age_adj','dpm','pid']]
@@ -696,8 +738,10 @@ def distance2(pid, yr, full_matrix, data_copy, weights_copy, print_df):
     score_mean = full_matrix[1:]['score'].mean()
     score_std = full_matrix[1:]['score'].std()
 
-    full_matrix = full_matrix.head(150)
-    #full_matrix = full_matrix.head(np.round(4*(yr-2001),0))  #does this make sense?
+    if(len(full_matrix[full_matrix['mdist']<=5])>150): full_matrix = full_matrix.head(150)
+    elif(len(full_matrix[full_matrix['mdist']<=5])<25): full_matrix = full_matrix.head(25)
+    else: full_matrix = full_matrix[full_matrix['mdist']<=5]
+    #full_matrix = full_matrix.head(150)
     """
     sample = full_matrix.loc[full_matrix['score'] >= (score_mean + 5 * score_std)] #4 or 3.75
     #print(len(sample))
@@ -742,15 +786,6 @@ def generate_fleishman_distribution(n_samples, mean, std, skew, kurt):
     #x = x.tolist()
     return x
 
-def get_a_from_skew(skew):
-    # Ensure skew is within theoretical limits (-0.995 to 0.995)
-    skew = np.clip(skew, -0.994, 0.994)
-    # Calculate d based on the relationship between skewness and shape
-    delta = np.sign(skew) * ( (np.pi/2) * (abs(skew)**(2/3)) / (abs(skew)**(2/3) + ((4-np.pi)/2)**(2/3)) )**0.5
-    # Calculate alpha (a)
-    a = delta / np.sqrt(1 - delta**2)
-    return a
-
 def skew_kurt_error(a, target_skew, target_kurt):
     from scipy.stats import skewnorm, skew, kurtosis
     from scipy.optimize import minimize_scalar
@@ -761,6 +796,15 @@ def skew_kurt_error(a, target_skew, target_kurt):
     # We return the sum of squared errors to minimize
     return (actual_skew - target_skew)**2 + (actual_kurt - target_kurt)**2
 
+def get_a_from_skew(skew):
+    # Ensure skew is within theoretical limits (-0.995 to 0.995)
+    skew = np.clip(skew, -0.994, 0.994)
+    # Calculate d based on the relationship between skewness and shape
+    delta = np.sign(skew) * ( (np.pi/2) * (abs(skew)**(2/3)) / (abs(skew)**(2/3) + ((4-np.pi)/2)**(2/3)) )**0.5
+    # Calculate alpha (a)
+    a = delta / np.sqrt(1 - delta**2)
+    return a
+
 def skewed_normal_distributions(n_samples, off_mean, off_std, off_skew, off_kurt, def_mean, def_std, def_skew, def_kurt, c):
     import scipy.stats as stats
     
@@ -770,6 +814,7 @@ def skewed_normal_distributions(n_samples, off_mean, off_std, off_skew, off_kurt
     if(np.isnan(def_kurt)): def_kurt = 1e-9
     if(np.isnan(c)): c = 0
     
+    #print(n_samples)
     #print(off_mean, off_std, off_skew, off_kurt)
     #print(def_mean, def_std, def_skew, def_kurt)
     #print(c)
@@ -799,18 +844,101 @@ def skewed_normal_distributions(n_samples, off_mean, off_std, off_skew, off_kurt
     var1 = dist1.ppf(uniform_samples[:, 0])
     var2 = dist2.ppf(uniform_samples[:, 1])
 
-    var1 = (var1 - np.mean(var1)) * (1+0.2*off_kurt) + np.mean(var1)
-    var2 = (var2 - np.mean(var2)) * (1+0.2*def_kurt) + np.mean(var2)
+    var1 = (var1 - np.mean(var1)) * (1+0.1*off_kurt) + np.mean(var1)
+    var2 = (var2 - np.mean(var2)) * (1+0.1*def_kurt) + np.mean(var2)
     
-    var1 = np.clip(var1, -3, 6) #-2.5
-    var2 = np.clip(var2, -2, 4) #-1.5
+    #var1 = np.clip(var1, -3, 6) #-2.5
+    #var2 = np.clip(var2, -2, 4) #-1.5
     
     pdata = np.vstack((var1, var2)).T
     #['dpm'] = 
     pdata = 1*pdata[:, 0] + 1*pdata[:, 1]
     pdata = np.nan_to_num(pdata, nan=-5)
     pdata = np.clip(pdata, -5, 10)
+    #print(pdata)
     return pdata
+
+def _skew_to_delta(skew):
+    skew = np.clip(skew, -0.994, 0.994)
+    s23 = np.abs(skew) ** (2.0 / 3.0)
+    delta = np.sign(skew) * np.sqrt((np.pi / 2.0) * s23 / (s23 + ((4.0 - np.pi) / 2.0) ** (2.0 / 3.0)))
+    return np.clip(delta, -1.0 + 1e-12, 1.0 - 1e-12)
+
+def _skewnorm_excess_kurtosis(delta):
+    pi = np.pi
+    return 8.0 * (pi - 3.0) * delta**4 / (pi - 2.0 * delta**2) ** 2
+
+def _apply_kurtosis_mixture(x, mu, k_target, delta):
+    if k_target <= 0.0:
+        return x
+
+    k_base = _skewnorm_excess_kurtosis(delta)
+    k_needed = max(0.0, k_target - k_base)
+
+    if k_needed <= 0.0:
+        return x
+
+    # variance-mixture strength
+    kappa = k_needed / 3.0
+    kappa = max(min(kappa, 1.0), -1.0)
+    #print(kappa)
+    # two-point mixture (mean-preserving)
+    u = np.random.rand(len(x))
+    s1 = np.sqrt(1.0 + np.sqrt(kappa))
+    s2 = np.sqrt(1.0 - np.sqrt(kappa))
+    scale = np.where(u < 0.5, s1, s2)
+    #print()
+    #print(mu)
+    #print(scale)
+    #print(x)
+
+    return mu + scale * (x - mu)
+
+def skewed_normal_distributions_fast(n_samples, off_mean, off_std, off_skew, off_kurt, def_mean, def_std, def_skew, def_kurt, c):    
+    # --- sanitize inputs ---
+    off_skew, off_kurt, def_skew, def_kurt, c = np.nan_to_num([off_skew, off_kurt, def_skew, def_kurt, c], nan=0.0)
+
+    #print(n_samples)
+    #print(off_mean, off_std, off_skew, off_kurt)
+    #print(def_mean, def_std, def_skew, def_kurt)
+    #print(c)
+
+    c = np.clip(c, -0.5, 0.5)
+    off_kurt = min(off_kurt, 5.0)
+    def_kurt = min(def_kurt, 5.0)
+
+    # --- skew parameters ---
+    delta1 = _skew_to_delta(off_skew)
+    delta2 = _skew_to_delta(def_skew)
+
+    s1 = np.sqrt(1.0 - delta1 * delta1)
+    s2 = np.sqrt(1.0 - delta2 * delta2)
+
+    # --- RNG (2 Gaussians only) ---
+    U = np.random.randn(n_samples)
+    V = np.random.randn(n_samples)
+
+    sc = np.sqrt(1.0 - c * c)
+
+    # orthogonal Gaussian construction
+    Z0 = U
+    Z1 = c * U + sc * V
+    Z2 = -sc * U + c * V
+
+    # --- direct skew-normal construction ---
+    var1 = off_mean + off_std * (delta1 * np.abs(Z0) + s1 * Z2)
+    var2 = def_mean + def_std * (delta2 * np.abs(Z1) + s2 * Z2)
+    #print(var1.mean(),var2.mean())
+
+    # --- exact kurtosis correction ---
+    var1 = _apply_kurtosis_mixture(var1, off_mean, off_kurt, delta1)
+    var2 = _apply_kurtosis_mixture(var2, def_mean, def_kurt, delta2)
+    #print(var1.mean(),var2.mean(),delta1,delta2)
+    
+    # --- combine & bound ---
+    pdata = var1 + var2
+    pdata = np.nan_to_num(pdata, nan=-5.0)
+    return pdata #np.clip(pdata, -5.0, 10.0)
 
 def clustering(start,end,n):
     #features = ['median', '95th']
@@ -1063,6 +1191,19 @@ def weighted_skew(var, wts):
 def weighted_kurtosis(var, wts):
     return (np.average((var - weighted_mean(var, wts))**4, weights=wts) / weighted_variance(var, wts)**(2))
 
+def calibrated_probability(n_s,n_t,p0=0.04,m=50,inflection=0.4,steepness=3,scale_high=2):
+    p = (n_s + m*p0) / (n_t + m)
+    eps = 1e-9 
+    p = np.clip(p,eps,1-eps)
+    #p_penalized = np.power(p, gamma)
+    #p_final = np.clip(p_penalized*scale_high, eps, 1-eps)
+    transformed = 1/(1+ np.exp(-steepness * (p - inflection)))
+    t_min = 1/(1+ np.exp(steepness * inflection))
+    t_max = 1/(1+ np.exp(-steepness * (1 - inflection)))
+    transformed = (transformed-t_min)/(t_max-t_min)
+    p_final = np.clip(transformed*scale_high, eps, 1-eps)
+    return p_final
+
 def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
     #dist = distance2(x, year, p_stats.copy(), data.copy(), print_val)
     dist = distance2(x, year, p_stats, data, cor_weights, print_val)
@@ -1087,7 +1228,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
     else: dist #= dist.loc[((dist['player']==x) & (dist['season']==year))]
     
     comps = league_stats[league_stats['pid'].isin(dist['pid'])]
-    nba_comps = len(comps['pid'].unique()) - 1
+    nba_comps = len(comps['pid'].unique()) #- 1
     #comps = comps.groupby('player_name')['dpm'].apply(lambda x: x.nlargest(5))
     samples = 100000
     
@@ -1126,42 +1267,47 @@ def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
     w_nba = 1#-np.tanh(0.4*nba_comps/tot_comps) #2 originally, seems too high
     
     try: 
-        p_nba = nba_comps/tot_comps
-        p_nba *= rotation_scale_factor
-    except ZeroDivisionError: p_nba = 0
+        p_nba = (nba_comps+0.04)/(tot_comps+1)  #mean success rate of translation is 4%
+        #p_nba = calibrated_probability(nba_comps*rotation_scale_factor,tot_comps)
+        p_nba = (rotation_scale_factor) * p_nba #+ (p_nba-0.5)*0.1
+    except ZeroDivisionError: p_nba = 0        
     
-    comps_list = off_comps.to_list() #+ [-3] * int((tot_comps-nba_comps)*w_nba) #-2.5
-    comps_list.sort()
-    skewness_off = skew(comps_list) #weighted_skew(dist_comps['o_dpm'],dist_comps['score'])
-    kurtosis_off = scipy.stats.kurtosis(comps_list) #weighted_kurtosis(dist_comps['o_dpm'],dist_comps['score'])
-    variance_off = np.var(comps_list) #weighted_variance(dist_comps['o_dpm'],dist_comps['score'])
-    mean_off = np.mean(comps_list)#weighted_mean(dist_comps['o_dpm'],dist_comps['score'])
+    if(p_nba>1): p_nba = 1
+    #print(tot_comps,nba_comps,p_nba)
     
-    comps_list = def_comps.to_list() #+ [-2] * int((tot_comps-nba_comps)*w_nba) #-1.5
+    comps_list = off_comps.to_list() #+ [-3] * int(tot_comps*(1-p_nba)) #int((tot_comps-nba_comps)*w_nba) #-2.5
     comps_list.sort()
-    skewness = skew(comps_list) #weighted_skew(dist_comps['d_dpm'],dist_comps['score'])
-    kurtosis = scipy.stats.kurtosis(comps_list) #weighted_kurtosis(dist_comps['d_dpm'],dist_comps['score'])
-    variance = np.var(comps_list) #weighted_variance(dist_comps['d_dpm'],dist_comps['score'])
-    mean = np.mean(comps_list) #weighted_mean(dist_comps['d_dpm'],dist_comps['score'])
+    skewness_off = skew(comps_list)
+    kurtosis_off = scipy.stats.kurtosis(comps_list)
+    variance_off = np.var(comps_list)
+    mean_off = np.mean(comps_list) #+ [-3] * max(10-nba_comps,0)
+    
+    comps_list = def_comps.to_list() #+ [-2] * int(tot_comps*(1-p_nba)) #* int((tot_comps-nba_comps)*w_nba) #-1.5
+    comps_list.sort()
+    skewness = skew(comps_list)
+    kurtosis = scipy.stats.kurtosis(comps_list)
+    variance = np.var(comps_list) 
+    mean = np.mean(comps_list) # + [-2] * max(10-nba_comps,0) 
     
     try: cor = off_comps.corr(def_comps)
     except: cor = 0
     
     if(print_val == 1):
         
+        p_weight_nba = np.ceil(samples*p_nba).astype(int)
+        p_weight_non_nba = np.ceil(samples*(1-p_nba)).astype(int)
+        
         #distribution_off = generate_fleishman_distribution(samples, mean_off, variance_off**0.5, skewness_off, kurtosis_off)
         #distribution_def = generate_fleishman_distribution(samples, mean, variance**0.5, skewness, kurtosis)
         #distribution = sum_of_unique_combinations(distribution_off,distribution_def)
-        distribution = skewed_normal_distributions(int(samples*p_nba), mean_off, variance_off**0.5, skewness_off, kurtosis_off, mean, variance**0.5, skewness, kurtosis, cor)
-        #distribution = np.append(distribution, [-5] * int(samples*(1-p_nba)))
+        distribution = skewed_normal_distributions_fast(p_weight_nba, mean_off, variance_off**0.5, skewness_off, kurtosis_off, mean, variance**0.5, skewness, kurtosis, cor)
         #print(distribution)
-        #bpm_gap = stats.percentileofscore(dist['bpm'].to_list(), bpm)
         
-        bench = np.sum(np.array(distribution) >= -1)/(samples) #0, -1.75
-        starter = np.sum(np.array(distribution) >= 0)/(samples) #1, -0.25
-        allstar = np.sum(np.array(distribution) >= 1)/(samples) #2.5, 0.75
-        allnba = np.sum(np.array(distribution) >= 2)/(samples) #4, 1.5
-        mvp = np.sum(np.array(distribution) >= 4.5)/(samples) #7.5, 3.75
+        bench = np.sum(np.array(distribution) >= -0.5)/(samples) #-1, 0, -1.75
+        starter = np.sum(np.array(distribution) >= 0.5)/(samples) #0, 1, -0.25
+        allstar = np.sum(np.array(distribution) >= 2)/(samples) #1, 2.5, 0.75
+        allnba = np.sum(np.array(distribution) >= 3)/(samples) #2, 4, 1.5
+        mvp = np.sum(np.array(distribution) >= 6)/(samples) #4.5, 7.5, 3.75
         
         p_5 = round(np.percentile(distribution, 5),2) #4
         p_50 = round(np.percentile(distribution, 50),2) #4
@@ -1234,33 +1380,41 @@ def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
         return dist
     else:
         p_mins = p_mpp * min(p_gp,40) * 40 #p_mp
-        #p_weight = np.tanh(p_mins * np.log(p_class+1)/800) * 10000
-        p_weight = (p_mins/3600) * (p_class) * 10000 #100000 is the old value
+        p_weight = max((p_mins/3600) * (p_class) * 10000, 20) #100000 is the old value
         p_mins = round(p_mins,0)
         p_weight_nba = np.ceil(p_weight*p_nba).astype(int)
         p_weight_non_nba = np.ceil(p_weight*(1-p_nba)).astype(int)
         p_weight = np.ceil(p_weight).astype(int)
-        #not sure why this was observed, investigate (2018 draft)
-        if(p_weight_nba<0): p_weight_nba = 0; p_weight_non_nba = p_weight
+        #not sure why this was observed, investigate
         
         try:
             #distribution_off = generate_fleishman_distribution(p_weight, mean_off, variance_off**0.5, skewness_off, kurtosis_off)            
             #distribution_def = generate_fleishman_distribution(p_weight, mean, variance**0.5, skewness, kurtosis)            
             #distribution = sum_of_unique_combinations(distribution_off,distribution_def)
-            distribution = skewed_normal_distributions(p_weight_nba, mean_off, variance_off**0.5, skewness_off, kurtosis_off, mean, variance**0.5, skewness, kurtosis, cor)
+            
+            #distribution = skewed_normal_distributions(p_weight_nba, mean_off, variance_off**0.5, skewness_off, kurtosis_off, mean, variance**0.5, skewness, kurtosis, cor)
+            distribution = skewed_normal_distributions_fast(p_weight_nba, mean_off, variance_off**0.5, skewness_off, kurtosis_off, mean, variance**0.5, skewness, kurtosis, cor)
             #distribution = np.append(distribution, [-5] * p_weight_non_nba)
             
             #p_5 = round(np.percentile(distribution, 5),2)
             #p_50 = round(np.percentile(distribution, 50),2)
-            meand = round(np.mean(distribution),2) #4
+            meand = round(np.mean(distribution),2)
             #p_95 = round(np.percentile(distribution, 95),2)
+            p_nba = round(p_nba,2)
             
-            print(p_name,year,p_mins,meand)
-            return [p_name, x, team, p_class, p_age, year, p_weight, distribution, p_weight]
+            if(p_class < 1):
+                print(p_name,year,p_weight_nba,p_nba,"HS equivalent season, excluded")
+                return [p_name, x, team, p_class, p_age, year, p_weight, []]
+            elif(len(distribution)==0):
+                print(p_name,year,p_weight_nba,p_nba,"No NBA comps")
+                return [p_name, x, team, p_class, p_age, year, p_weight, np.full(1, -5.0, dtype=float)]
+            else:
+                print(p_name,year,p_weight_nba,p_nba,meand)
+                return [p_name, x, team, p_class, p_age, year, p_weight, distribution]
         
-        except IndexError:
-            print(p_name,year,p_mins,"No NBA comps")
-            return [p_name, x, team, p_class, p_age, year, p_weight, [], p_weight]
+        except:
+            print(p_name,year,"Error")
+            return [p_name, x, team, p_class, p_age, year, p_weight, np.full(1, -5.0, dtype=float)]
     
 def calculate_percentile(data_list, percentile): return np.percentile(data_list, percentile)
 
@@ -1326,7 +1480,7 @@ def mdist_list(year, p_stats, cor_weights, print_val, get_all_player_stats):
             page = player_list[4]
             pseason = player_list[5]
             #ppid = player_list[1] #check this
-            p_weight += player_list[8]
+            p_weight += player_list[6]
     
             try:
                 full_dist.extend(player_list[7])  # MUCH faster than +
@@ -1339,12 +1493,12 @@ def mdist_list(year, p_stats, cor_weights, print_val, get_all_player_stats):
     
         arr = np.array(full_dist)  # convert ONCE
     
-        pnba     = np.sum(arr > -5) / p_weight
-        pbench   = np.sum(arr >= -1) / p_weight
-        pstarter = np.sum(arr >= 0) / p_weight
-        pallstar = np.sum(arr >= 1) / p_weight
-        pallnba  = np.sum(arr >= 2) / p_weight
-        pmvp     = np.sum(arr >= 4.5) / p_weight
+        pnba     = np.sum(arr > -4) / p_weight #-5
+        pbench   = np.sum(arr >= 0) / p_weight #-1
+        pstarter = np.sum(arr >= 1) / p_weight #0
+        pallstar = np.sum(arr >= 2) / p_weight #1
+        pallnba  = np.sum(arr >= 3) / p_weight #2
+        pmvp     = np.sum(arr >= 6) / p_weight #4.5
     
         p_5  = round(np.percentile(arr, 5), 2)
         p_50 = round(np.percentile(arr, 50), 2)
