@@ -37,8 +37,8 @@ from pandas.errors import SettingWithCopyWarning
 warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 pd.set_option('mode.chained_assignment', None)
 
-path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
-#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
+#path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 #%% choose season to run
 latest_season = 2026
@@ -163,25 +163,7 @@ def pre_08_ncaa():
 def bpm_estimate(df):
     df['2par'] = 1 - df['3par']
     df['2P%'] = (((df['TS%']/100) * (1+0.44*df['ftr']) * 2)-(df['ftr']*df['FT%'] + 3*df['3par']*df['3P%']))/(2*df['2par'])
-    """
-    df['bpm'] = -0.144113373288963 + \
-                +0.099780626377398  * df['mp'] + \
-                -0.033812208445742  * df['usg'] + \
-                -0.0794753081021516 * df['TS%'] + \
-                +0.0938757627410997 * df['ORB%'] + \
-                -0.0198264884876267 * df['DRB%'] + \
-                +0.0498729810633044 * df['AST%'] + \
-                +0.05202239249302   * df['TO%'] + \
-                +0.20818594724229   * df['ast/tov'] + \
-                +0.384495013690059  * df['BLK%'] + \
-                +0.613544025847017  * df['STL%'] + \
-                -0.161067815268391  * df['ftr'] + \
-                -1.17542648511186   * df['FT%'] + \
-                +2.30629767192219   * df['3par'] + \
-                +0.599363695211862  * df['3P%'] + \
-                +0.236841287583253  * df['ORtg'] + \
-                -0.246965207036096  * df['drtg']
-    """
+
     df['bpm'] = -1.618 + \
                 +0.098 * df['mp'] + \
                 -0.023 * df['usg'] + \
@@ -307,11 +289,21 @@ def extract_player_stats():
         #replacement_level = data_adj[num_cols].select_dtypes(include="number").quantile(0.1)
         #data_adj[num_cols] = (data_adj[num_cols].mul(data_adj['mp']*data_adj['GP'], axis=0).add(replacement_level * 50)).div(data_adj['mp']*data_adj['GP'] + 50, axis=0)
         
+        #regress 3P% to the mean
+        data_adj['FT%_regressed'] = (data_adj['FT%']*data_adj['ftr']*data_adj['mp']*data_adj['GP'] + 100*0.65)/(data_adj['mp']*data_adj['GP']*data_adj['ftr']+100)
+        data_adj['3p_regress_val'] = zscore(data_adj['FT%_regressed'], nan_policy='omit')
+        p3_mean = data_adj.loc[(data_adj['3par']<1)&(data_adj['3par']>0),'3P%'].mean()
+        p3_stdev = data_adj.loc[(data_adj['3par']<1)&(data_adj['3par']>0),'3P%'].std()
+        data_adj['3p_regress_val'] = data_adj['3p_regress_val']*p3_stdev + p3_mean/1.5
+        data_adj['3p_regress_val'] = data_adj['3p_regress_val'].clip(lower=0)
+        data_adj['3p_regress_val'] = data_adj['3p_regress_val'].clip(upper=0.5)
+        data_adj['3P%_regressed'] = (data_adj['3P%']*data_adj['3par']*data_adj['mp']*data_adj['GP'] + data_adj['3p_regress_val']*250)/ (data_adj['3par']*data_adj['mp']*data_adj['GP'] + 250)
+        
         unadj_p_stats.append(data_adj.copy())
         
         for x in ['ORB%','DRB%','BLK%','blk_share','STL%','stl_share','AST%','TO%','ast/tov']:
             data_adj = log_adjust(data_adj,x)
-        for x in ['usg','ftr','rimar','midar','3par','3P%','rim%','mid%','FT%','pfr','3prof','2par','2P%','rimprof','midprof','ORtg','drtg','bpm']:
+        for x in ['usg','ftr','rimar','midar','3par','3P%','3P%_regressed','rim%','mid%','FT%','pfr','3prof','2par','2P%','rimprof','midprof','ORtg','drtg','bpm']:
             data_adj = iqr_column(data_adj,x)
         for x in ['mp','dunkar']:
             data_adj = norm_inv_column(data_adj,x)
@@ -326,7 +318,7 @@ def extract_player_stats():
     unadj_p_stats = df_role(unadj_p_stats)
     
     
-    p_stats['hgt'] = p_stats['hgt'] - 60
+    #p_stats['hgt'] = p_stats['hgt'] - 60
     p_stats = iqr_column(p_stats,'hgt')
     p_stats = log_adjust(p_stats,'class')
     p_stats = iqr_column(p_stats,'age')
@@ -392,7 +384,7 @@ def pivot_data(df,df2):
 #%% correlation matrix for all the stats under consideration
 correl_columns = ['age','class','hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'blk_share','stl_share', 'ftr','FT%', 
                   #'BLK%','STL%','dunkar','rimprof','midprof','3prof',
-                  'dunkar','rimar', 'rim%', 'midar', 'mid%', '3par', '3P%', 'bpm','ORtg','drtg','adj_rating','mp','role']
+                  'dunkar','rimar', 'rim%', 'midar', 'mid%', '3par', '3P%_regressed', 'bpm','ORtg','drtg','adj_rating','mp','role']
 
 data = data[correl_columns]
 data = data_imputation_08_09(data.copy())
@@ -1071,6 +1063,7 @@ def model_accuracy_measurement(stats_df,start,end,results_file):
         
         #check if this is needed
         model_pred = model_pred[~(model_pred['season_x']<i)]
+        model_pred2 = model_pred[(model_pred['season_x']>=i)&(model_pred['dpm']>-5)]
         try: allnba_log_loss = log_loss(model_pred['a_all nba'], model_pred['all nba'])
         except ValueError: allnba_log_loss = 0
         
@@ -1083,19 +1076,19 @@ def model_accuracy_measurement(stats_df,start,end,results_file):
         correlations.append([i,len(model_pred),model_pred['dpm'].corr(model_pred['mean DPM']),
                              np.sqrt(((model_pred['dpm'] - model_pred['mean DPM']) ** 2).mean())])
         
-        spearman.append([i,len(model_pred),
-                        spearmanr(model_pred['mean DPM'], model_pred['dpm'])[0],
-                        spearmanr(model_pred['a_rotation'], model_pred['dpm'])[0],
-                        spearmanr(model_pred['a_starter'], model_pred['dpm'])[0],
-                        spearmanr(model_pred['a_all star'], model_pred['dpm'])[0],
-                        spearmanr(model_pred['a_all nba'], model_pred['dpm'])[0]])
+        spearman.append([i,len(model_pred2),
+                        spearmanr(model_pred2['mean DPM'], model_pred2['dpm'])[0],
+                        spearmanr(model_pred2['a_rotation'], model_pred2['dpm'])[0],
+                        spearmanr(model_pred2['a_starter'], model_pred2['dpm'])[0],
+                        spearmanr(model_pred2['a_all star'], model_pred2['dpm'])[0],
+                        spearmanr(model_pred2['a_all nba'], model_pred2['dpm'])[0]])
         
-        kendall.append([i,len(model_pred),
-                        kendalltau(model_pred['mean DPM'], model_pred['dpm'])[0],
-                        kendalltau(model_pred['a_rotation'], model_pred['dpm'])[0],
-                        kendalltau(model_pred['a_starter'], model_pred['dpm'])[0],
-                        kendalltau(model_pred['a_all star'], model_pred['dpm'])[0],
-                        kendalltau(model_pred['a_all nba'], model_pred['dpm'])[0]])
+        kendall.append([i,len(model_pred2),
+                        kendalltau(model_pred2['mean DPM'], model_pred2['dpm'])[0],
+                        kendalltau(model_pred2['a_rotation'], model_pred2['dpm'])[0],
+                        kendalltau(model_pred2['a_starter'], model_pred2['dpm'])[0],
+                        kendalltau(model_pred2['a_all star'], model_pred2['dpm'])[0],
+                        kendalltau(model_pred2['a_all nba'], model_pred2['dpm'])[0]])
         
         brier_scores.append([i,len(model_pred),
                              brier_score_loss(model_pred['a_rotation'], model_pred['rotation']),
@@ -1230,11 +1223,11 @@ def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
     try: 
         #p_nba = (nba_comps+0.04)/(tot_comps+1)  #mean success rate of translation is 4%
         #p_nba = (rotation_scale_factor) * p_nba #+ (p_nba-0.5)*0.1
-        p_nba = calibrated_probability(nba_comps,tot_comps) * rotation_scale_factor
+        padding = np.exp(-((1-min(1.2*p_gp/40,1))))
+        p_nba = calibrated_probability(nba_comps*padding*rotation_scale_factor,tot_comps)
     except ZeroDivisionError: p_nba = 0        
     
-    if(p_nba>1): p_nba = 1
-    #print(tot_comps,nba_comps,p_nba)
+    if(p_nba>=1): p_nba = 1
     
     comps_list = off_comps.to_list() + [-3] *int(tot_comps*(1-p_nba)) #-2.5
     comps_list.sort()
@@ -1363,7 +1356,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
             p_nba = round(p_nba,2)
             
             if(p_class < 1):
-                print(p_name,int(year),p_weight,"HS equivalent season, excluded")
+                print(p_name,int(year),"HS equivalent season, excluded")
                 return [p_name, x, team, p_class, p_age, year, p_weight, []]
             elif(len(distribution)==0):
                 print(p_name,int(year),p_weight,"No NBA comps")
@@ -1550,9 +1543,9 @@ def hyperparameter_tuning(n):
 
 #%% call the player comparision function
 
-pcomps = player_comp_analysis(134193, latest_season, player_stats.copy(), nba_stats.copy(), correl_weights.copy(), 1) #Darryn Peterson
+#pcomps = player_comp_analysis(134193, latest_season, player_stats.copy(), nba_stats.copy(), correl_weights.copy(), 1) #Darryn Peterson
 
-#draft_list = mdist_list(latest_season, player_stats.copy(), correl_weights.copy(), 0, 1)
+draft_list = mdist_list(latest_season, player_stats.copy(), correl_weights.copy(), 0, 0)
 
 #clustered_list = clustering(2016,2026,9)
 
