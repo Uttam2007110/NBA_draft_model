@@ -40,11 +40,11 @@ from pandas.errors import SettingWithCopyWarning
 warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 pd.set_option('mode.chained_assignment', None)
 
-path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
-#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
+#path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 #%% choose season to run
-latest_season = 2021
+latest_season = 2022
 
 #%% team ratings
 def team_ratings():
@@ -108,6 +108,16 @@ def height_adj(df):
     df = df[df['hgt']>=60]
     return df
 
+def height_based_roles(df):
+    #gaussian roles
+    import scipy.stats as stats
+    df['hgt'] = df['hgt'].fillna(60) #verify this
+    df['short'] = stats.norm.cdf(72, loc=df["hgt"], scale=2)
+    df['guard'] = stats.norm.cdf(78, loc=df["hgt"], scale=2) - stats.norm.cdf(72, loc=df["hgt"], scale=2)
+    df['wing'] = stats.norm.cdf(83, loc=df["hgt"], scale=2) - stats.norm.cdf(76, loc=df["hgt"], scale=2)
+    df['big'] = 1 - stats.norm.cdf(82, loc=df["hgt"], scale=2)
+    return df
+    
 def log_adjust(df,category):
     df[category] = np.log(df[category])
     df[category] = df[category].replace(-np.inf, np.nan)
@@ -289,18 +299,21 @@ def extract_player_stats():
         data_adj['rimprof'] = data_adj['rim%']*(2/(1+np.exp(-4*data_adj['rimar']))-1)
         data_adj['midprof'] = data_adj['mid%']*(2/(1+np.exp(-4*data_adj['midar']))-1)
         
+        #height based roles
+        data_adj = height_based_roles(data_adj)
+        
         #regress 3P% to the mean
         data_adj['ftr'] = data_adj['ftr'].fillna(0)
         
         regression_subset = data_adj[(data_adj['mp']>5)&(data_adj['GP']>5)]
-        X_train, X_test, y_train, y_test = train_test_split(regression_subset[['DRB%','ast/tov','FT%','3par']], regression_subset['3P%'], test_size=0.2, random_state=42)
+        X_train, X_test, y_train, y_test = train_test_split(regression_subset[['hgt','ast/tov','FT%','3par']], regression_subset['3P%'], test_size=0.2, random_state=42)
         model = Ridge(alpha=1)
         scaler = RobustScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.fit_transform(X_test)
         model.fit(X_train_scaled, y_train)
         #print("Random forest for 3P% R-squared",r2_score(y_test, model.predict(X_test_scaled)))
-        data_adj['3p_regress_val'] = model.predict(scaler.fit_transform(data_adj[['DRB%','ast/tov','FT%','3par']]))
+        data_adj['3p_regress_val'] = model.predict(scaler.fit_transform(data_adj[['hgt','ast/tov','FT%','3par']]))
         data_adj['3P%_regressed'] = (data_adj['3P%']*data_adj['3par']*data_adj['mp']*data_adj['GP'] + data_adj['3p_regress_val']*500)/ (data_adj['3par']*data_adj['mp']*data_adj['GP'] + 500)
         #data_adj['3P%_regressed'] = np.where(data_adj['3par']<0.01,0,data_adj['3P%_regressed'])
         
@@ -313,15 +326,17 @@ def extract_player_stats():
         data_adj['oreb_share'] = data_adj['ORB%'].rank(pct=True)/(data_adj['DRB%'].rank(pct=True)+data_adj['ORB%'].rank(pct=True)+0.00001)
         data_adj['TS_ast'] = data_adj['TS%'].rank(pct=True)-data_adj['AST%'].rank(pct=True)
         
+        
         unadj_p_stats.append(data_adj.copy())
         
         for x in ['ORB%','DRB%','BLK%','blk_share','STL%','stl_share','AST%','TO%','ast/tov',
-                  'stocks','bds','TS_ast','feel','jimmy','hgt_3par','stocks','oreb_share']: #'oreb_share','hgt_3par'
+                  'bds','TS_ast','hgt_3par','stocks','oreb_share']: #'oreb_share','hgt_3par','feel','jimmy'
             data_adj = log_adjust(data_adj,x)
         for x in ['usg','ftr','rimar','midar','3par','rim%','mid%','pfr','3P%','3P%_regressed','2P%',
                   '3prof','2par','rimprof','midprof','ORtg','drtg','bpm','bpm_adj']:
             data_adj = iqr_column(data_adj,x)
-        for x in ['mp','GP','dunkar','dunkasst','rimasst','midasst','3Passt','FT%']:
+        for x in ['mp','GP','dunkar','dunkasst','rimasst','midasst','3Passt','FT%',
+                  'feel','short','guard','wing','big']:
             data_adj = norm_inv_column(data_adj,x)
         p_stats.append(data_adj)
         i+=1
@@ -333,13 +348,11 @@ def extract_player_stats():
     p_stats = df_role(p_stats)
     unadj_p_stats = df_role(unadj_p_stats)
     
-    
     #p_stats['hgt'] = p_stats['hgt'] - 60
     p_stats = iqr_column(p_stats,'hgt')
     p_stats = log_adjust(p_stats,'class')
     p_stats = iqr_column(p_stats,'age')
-    p_stats = log_adjust(p_stats,'role')
-    
+    p_stats = log_adjust(p_stats,'role')    
     return p_stats,unadj_p_stats
 
 data,player_stats = extract_player_stats()
@@ -405,7 +418,7 @@ correl_columns = ['age', 'class', 'hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', '
                   #'BLK%','STL%','dunkar','rimprof','midprof','3prof','bpm_adj','role' , 'adj_rating'
                   'dunkar','rimar', 'rim%', 'midar', 'mid%', '3par', '3P%', 'bpm','ORtg','drtg','mp',
                   'role','rimasst','midasst','bpm_adj',
-                  'feel']
+                  'feel','stocks', 'short','big']
 
 data = data[correl_columns]
 data = data_imputation_08_09(data.copy())
@@ -439,16 +452,20 @@ def get_analytical_weights(X):
     
     #v5, rimasst, midasst and interaction terms
     optimal_weights = [1,1.15,0.9,1,0.95,1,1,1.05,0.95,1.05,1,1,1,1,1,1,1,1,1,0.9,1.25,1.05,0.9,1.1, 1,1,1,1, 
-                       1.15] #1.15,0.9,0.9,0.75,1
+                       1.15,0.9, 1,1] #1.15,0.9,0.9,0.75,1
+    
+    #v6, post grid search after adding interaction terms
+    #optimal_weights = [1.1, 1.5, 0.9, 1.1, 0.5, 1.1, 1.25, 1.5, 0.75, 0.9, 0.5, 1.0, 1.0, 
+    #                   1.25, 0.75, 0.5, 1.0, 0.5, 1.1, 0.75, 0.5, 0.5, 0.75, 1.5, 1.5, 1.1, 1.1, 1.0, 1.5, 1.25]
     return np.array(optimal_weights)
 
 def get_analytical_weights_randomized(X,i):
     import random
     #optimal_weights = len(X.columns) * [1]
-    optimal_weights = [1,1.15,0.9,1,0.95,1,1,1.05,0.95,1.05,1,1,1,0.9,1,1,1,1,0.9,1,1.25,1,0.85,1.05,1.1, 1.25,0.9,1] #1.25,0.9,1
+    optimal_weights = [1,1.15,0.9,1,0.95,1,1,1.05,0.95,1.05,1,1,1,0.9,1,1,1,1,0.9,1,1.25,1,0.85,1.05,1.1, 1.25,0.9,1, 1.15,0.9] #1.25,0.9,1
     target_set = [.5,.75,.9,1,1.1,1.25,1.5]
     #selected_indices = [0]
-    j=25
+    j=0
     while(j<len(optimal_weights)):
         optimal_weights[j] = random.choice(target_set)
         j+=1
@@ -461,7 +478,7 @@ def plot_histograms(df):
     plt.tight_layout() # Adjust layout to prevent overlap
     plt.show()
 
-#plot_histograms(data)
+plot_histograms(data)
 
 #%% nba mins per season (for padding the DARKO values for backup centers)
 def mins_per_season(season):
@@ -607,29 +624,45 @@ def p_nba_scaling(league_stats,p_stats):
 
 def fit_ml_model(p_stats):
     import xgboost as xgb
+    from sklearn.calibration import CalibratedClassifierCV
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import accuracy_score
     
     data_copy2 = p_stats[p_stats['season']<latest_season-3]
     
-    columns_considered = ['age', 'hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'blk_share', 'stl_share', 'intl',
-                          'ftr', 'FT%', '3par', '3P%_regressed', 'bpm', 'ORtg', 'drtg', 'mp', 'role', 
-                          'adj_rating_20','adj_rating_40','adj_rating_60','adj_rating_80'] #'feel'
+    columns_considered = ['age','class', 'hgt', 'usg', 'TS%', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'blk_share', 'stl_share','BLK%', 'STL%',
+                          'ftr', 'FT%', '3par', '3P%', '3P%_regressed', 'bpm', 'ORtg', 'drtg', 'mp', 'role', 'adj_rating', 'intl',
+                          #'adj_rating_20','adj_rating_40','adj_rating_60','adj_rating_80','adj_rating_90',
+                          'feel','stocks','short']
     
     X = data_copy2[columns_considered]
     y = data_copy2['made_nba']
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
     
-    model = xgb.XGBClassifier(n_estimators=100, max_depth=3, learning_rate=0.1) #objective='reg:logistic'
+    scaling = (len(X)-y.sum())/y.sum()
+    
+    model = xgb.XGBClassifier(objective='binary:logistic', n_estimators=400, max_depth=4, learning_rate=0.03, 
+                              eval_metric='aucpr', tree_method='hist', min_child_weight=5, subsample=0.85, 
+                              colsample_bytree=0.7, reg_lambda=2.0, scale_pos_weight=scaling, max_delta_step=1)
+    
+    #model = xgb.XGBClassifier(n_estimators=100, max_depth=3, learning_rate=0.1, scale_pos_weight=scaling, max_delta_step=1) #objective='reg:logistic'
     #model = xgb.XGBRegressor(objective='reg:logistic', eval_metric='logloss', n_estimators=100, learning_rate=0.1)
     model.fit(X_train, y_train)
     
     preds = model.predict(X_test)
     print("p_nba model accuracy on the test set",accuracy_score(y_test, preds))
-    probabilities = model.predict_proba(p_stats[columns_considered])
+    
+    calibrated_model = CalibratedClassifierCV(
+        estimator=model,
+        method="isotonic",  #"sigmoid"
+        cv=5
+    )
+    calibrated_model.fit(X_train, y_train)
+
+    probabilities = calibrated_model.predict_proba(p_stats[columns_considered])
     p_stats['pred'] = probabilities[:,1]
-    #probabilities = model.predict(p_stats[columns_considered])
-    #p_stats['pred'] = probabilities
+    #binary = model.predict(p_stats[columns_considered])
+    #p_stats['pred'] = binary
     return p_stats
 
 def p_nba_player(p_stats,data_copy,league_stats):        
@@ -646,10 +679,12 @@ def p_nba_player(p_stats,data_copy,league_stats):
     #p_stats['adj_rating'] = data_copy['adj_rating'].rank(pct=True)
     p_stats = p_stats.merge(team_ranking, on=['team','season'], how='left')
     p_stats[['ORtg','drtg','adj_rating']] = data_imputation_08_09(p_stats[['ORtg','drtg','adj_rating']])
-    p_stats['adj_rating_20'] = np.where((p_stats['adj_rating']>0.2)|(p_stats['intl']==1),1,0)
-    p_stats['adj_rating_40'] = np.where((p_stats['adj_rating']>0.4)|(p_stats['intl']==1),1,0)
-    p_stats['adj_rating_60'] = np.where((p_stats['adj_rating']>0.6)|(p_stats['intl']==1),1,0)
-    p_stats['adj_rating_80'] = np.where((p_stats['adj_rating']>0.8)|(p_stats['intl']==1),1,0)
+    #p_stats['adj_rating_20'] = np.where(((p_stats['adj_rating']>=0.2) & (p_stats['adj_rating']<0.4)),1,0)
+    #p_stats['adj_rating_40'] = np.where(((p_stats['adj_rating']>=0.4) & (p_stats['adj_rating']<0.6)),1,0)
+    #p_stats['adj_rating_60'] = np.where(((p_stats['adj_rating']>=0.6) & (p_stats['adj_rating']<0.8)),1,0)
+    #p_stats['adj_rating_80'] = np.where(((p_stats['adj_rating']>=0.8) & (p_stats['adj_rating']<0.9)),1,0)
+    #p_stats['adj_rating_90'] = np.where((p_stats['adj_rating']>=0.9),1,0) #|(p_stats['intl']==1)
+
     
     p_stats['GP_adj'] = np.where(p_stats['intl']==0,p_stats['GP'],40)
     p_stats['GP_adj'] = np.where(p_stats['GP_adj']<10,0,1)
