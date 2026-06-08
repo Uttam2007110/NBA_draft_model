@@ -46,7 +46,7 @@ path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
 #path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 #%% choose season to run
-latest_season = 2020
+latest_season = 2018
 
 #%% team ratings
 def team_ratings():
@@ -483,6 +483,7 @@ interaction_columns = ['age_usg', 'age_ORB%', 'age_DRB%', 'age_AST%', 'age_TO%',
 
 
 data[correl_columns] = data_imputation_08_09(data[correl_columns].copy())
+data_full = data[list(set(correl_columns+interaction_columns+['adj_rating']))]
 
 #correl_columns = correl_columns + interaction_columns
 data = data[correl_columns] 
@@ -522,8 +523,11 @@ def get_analytical_weights(X):
                        1,1,1,1,1] #+ 34 * [1]
     
     #v6, post grid search after adding interaction terms
-    #optimal_weights = [1.1, 1.5, 0.9, 1.1, 0.5, 1.1, 1.25, 1.5, 0.75, 0.9, 0.5, 1.0, 1.0, 
-    #                   1.25, 0.75, 0.5, 1.0, 0.5, 1.1, 0.75, 0.5, 0.5, 0.75, 1.5, 1.5, 1.1, 1.1, 1.0, 1.5, 1.25]
+    """
+    optimal_weights = [0.5, 0.5, 1.0, 1.5, 0.75, 0.9, 0.9, 0.9, 0.75, 0.75, 0.5, 0.9, 0.75, 0.75, 
+                       0.5, 0.75, 1.1, 1.5, 0.75, 1.5, 0.5, 1.0, 1.5, 1.0, 1.0, 0.9, 0.75, 1.25, 
+                       1.0, 1.5, 0.5, 1.5, 0.9, 1.25, 1.1, 1.0, 1.1, 1.1, 1.5]
+    """
     return np.array(optimal_weights)
 
 def get_analytical_weights_randomized(X,i):
@@ -750,76 +754,151 @@ def p_nba_player(p_stats,data_copy,league_stats):
 
 #%% random forest based model
 def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season_end):
-    off_comps = league_stats.groupby(['player_name','pid'])['o_dpm'].apply(lambda x: x.nlargest(5))
-    off_comps = off_comps.groupby(['player_name','pid']).mean()
-    off_comps = off_comps.dropna()
-    off_comps = off_comps.reset_index()
+    import numpy as np
+    import xgboost as xgb
+    from sklearn.model_selection import StratifiedKFold
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import average_precision_score, roc_auc_score, brier_score_loss
 
-    def_comps = league_stats.groupby(['player_name','pid'])['d_dpm'].apply(lambda x: x.nlargest(5))
-    def_comps = def_comps.groupby(['player_name','pid']).mean()
-    def_comps = def_comps.dropna()
-    def_comps = def_comps.reset_index()
+    # ---- build target dpm from top-5 offensive/defensive comps ----
+    off_comps = league_stats.groupby(["player_name", "pid"])["o_dpm"].apply(lambda x: x.nlargest(5))
+    off_comps = off_comps.groupby(["player_name", "pid"]).mean().dropna().reset_index()
+
+    def_comps = league_stats.groupby(["player_name", "pid"])["d_dpm"].apply(lambda x: x.nlargest(5))
+    def_comps = def_comps.groupby(["player_name", "pid"]).mean().dropna().reset_index()
 
     dist2 = off_comps.copy()
-    dist2['d_dpm'] = def_comps['d_dpm']
-    dist2['dpm'] = 1*dist2['o_dpm'] + 1*dist2['d_dpm']
-    dist2 = dist2[['pid','player_name','dpm']]
-    
-    pre_nba_data[['player','pid','team','season']] = pre_nba_raw[['player','pid','team','season']]
-    #pre_nba_data = pre_nba_data[pre_nba_data['pid']>=0]
-    pre_nba_data = pre_nba_data.merge(dist2[['pid','dpm']], on=['pid'], how='left')
-    df_sorted = pre_nba_data.sort_values(by=['season', 'dpm'], ascending=[False, False])
-    #df_sorted = df_sorted.drop_duplicates(subset=['pid'], keep='first')
-    df_sorted['dpm'] = df_sorted['dpm'].fillna(-5.0) #-4
-    df_sorted.loc[df_sorted['dpm']<-5,'dpm'] = -5.0 #-4
-    
-    df_test = df_sorted[df_sorted['season']>train_season_end]
-    df_train = df_sorted[df_sorted['season']<=train_season_end]
-    
-    model_params = correl_columns
-    
-    from sklearn.ensemble import RandomForestRegressor
-    from sklearn.model_selection import cross_val_score, KFold, GridSearchCV
-    
-    #model = RandomForestRegressor(n_estimators=100)#, max_depth=10)
-    model = RandomForestRegressor(n_estimators=200, max_depth=None, min_samples_split=2)
-    
-    #cross validation
-    kf = KFold(n_splits=5, shuffle=True)
-    scores = cross_val_score(model, df_train[model_params], df_train['dpm'], cv=kf, scoring='neg_mean_squared_error')
-    rmse_scores = np.sqrt(-scores)
-    print(f"RMSE scores for each fold: {rmse_scores}")
-    print(f"Mean RMSE: {np.mean(rmse_scores)}")
-    print(f"Standard deviation of RMSE: {np.std(rmse_scores)}")
-    """
-    #Grid Search
-    param_grid = {
-        'n_estimators': [50, 100, 200],
-        'max_depth': [None, 10, 20],
-        'min_samples_split': [2, 5, 10]
-    }
+    dist2["d_dpm"] = def_comps["d_dpm"]
+    dist2["dpm"] = dist2["o_dpm"] + dist2["d_dpm"]
+    dist2 = dist2[["pid", "player_name", "dpm"]]
 
-    # Initialize GridSearchCV
-    grid_search = GridSearchCV(estimator=model, param_grid=param_grid,
-                               cv=kf, scoring='neg_mean_squared_error', n_jobs=-1)
+    pre_nba_data[["player", "pid", "team", "season","intl"]] = pre_nba_raw[["player", "pid", "team", "season","intl"]]
+    pre_nba_data = pre_nba_data.merge(dist2[["pid", "dpm"]], on=["pid"], how="left")
+    df_sorted = pre_nba_data.sort_values(by=["season", "dpm"], ascending=[False, False])
+    df_sorted["dpm"] = df_sorted["dpm"].fillna(-5.0)
+    df_sorted.loc[df_sorted["dpm"] < -5, "dpm"] = -5.0
 
-    # Fit GridSearchCV to the data
-    grid_search.fit(df_train[model_params], df_train['dpm'])
+    df_sorted["makes NBA"] = np.where(df_sorted["dpm"] > -5, 1, 0)
+    df_sorted["rotation"] = np.where(df_sorted["dpm"] >= -1, 1, 0)
+    df_sorted["starter"] = np.where(df_sorted["dpm"] >= 0, 1, 0)
+    df_sorted["all star"] = np.where(df_sorted["dpm"] >= 1, 1, 0)
+    df_sorted["all nba"] = np.where(df_sorted["dpm"] >= 2, 1, 0)
+    df_sorted["mvp"] = np.where(df_sorted["dpm"] >= 4.5, 1, 0)
 
-    print(f"Best parameters found: {grid_search.best_params_}")
-    print(f"Best cross-validation RMSE: {np.sqrt(-grid_search.best_score_)}")
+    # five nested binary tiers, each rarer than the last
+    tier_names = ["makes NBA", "rotation", "starter", "all star", "all nba", "mvp"]
 
-    # Get the best model
-    best_rf_model = grid_search.best_estimator
-    """
-    model.fit(df_train[model_params], df_train['dpm'])
-    print("Training score",model.score(df_train[model_params], df_train['dpm']))
-    #print("feature importance",model.feature_importances_)
-    df_train['fitted'] = model.predict(df_train[model_params])
-    df_test['fitted'] = model.predict(df_test[model_params])
-    
-    return df_train[['pid','player','team','season','dpm','fitted']], df_test[['pid','player','team','season','dpm','fitted']]
-    
+    df_train = df_sorted[df_sorted["season"] <= train_season_end].copy()
+    df_test = df_sorted[df_sorted["season"] == latest_season].copy()
+
+    # deterministic, order-preserving feature list (drop the categorical "role")
+    columns_considered = correl_columns + interaction_columns + ['adj_rating','intl']
+    columns_considered.remove('role')
+    #seen = set()
+    #columns_considered = [c for c in (correl_columns + interaction_columns )
+    #                      if c != "role" and not (c in seen or seen.add(c))]
+
+    X = df_train[columns_considered].to_numpy(dtype=float)
+    X_test = df_test[columns_considered].to_numpy(dtype=float)
+
+    def make_model(spw):
+        # strong regularization + shallow trees to avoid memorizing the rare class
+        return xgb.XGBClassifier(
+            objective="binary:logistic",
+            n_estimators=500,
+            learning_rate=0.02,
+            max_depth=3,
+            min_child_weight=8,
+            subsample=0.8,
+            colsample_bytree=0.6,
+            reg_lambda=3.0,
+            reg_alpha=0.5,
+            gamma=1.0,
+            eval_metric="aucpr",
+            tree_method="hist",
+            scale_pos_weight=spw,
+            max_delta_step=1,
+            random_state=42,
+        )
+
+    eps = 1e-6
+
+    def to_logit(p):
+        p = np.clip(p, eps, 1 - eps)
+        return np.log(p / (1 - p)).reshape(-1, 1)
+
+    def fit_tier(name):
+        y = df_train[name].to_numpy(dtype=int)
+        n_pos = int(y.sum())
+        n_neg = len(y) - n_pos
+        pred_col = "pred_" + name.replace(" ", "_")
+
+        # too few positives to stratify into folds -> emit base rate, skip modelling
+        if n_pos < 5:
+            base = float(y.mean())
+            print(f"[{name}] positives = {n_pos} / {len(y)} -> too few to model; "
+                  f"using base rate {base:.5f}")
+            df_train[pred_col] = base
+            df_test[pred_col] = base
+            return
+
+        # The full neg/pos ratio over-inflates and overfits the rare class; since we
+        # calibrate afterwards, a milder sqrt weighting learns the minority signal
+        # without distorting probabilities as severely.
+        spw = float(np.sqrt(n_neg / max(n_pos, 1)))
+
+        # leak-free out-of-fold raw scores on TRAIN
+        n_splits = min(5, n_pos)
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+        oof_raw = np.zeros(len(y), dtype=float)
+        for tr_idx, va_idx in skf.split(X, y):
+            m = make_model(spw)
+            m.fit(X[tr_idx], y[tr_idx])
+            oof_raw[va_idx] = m.predict_proba(X[va_idx])[:, 1]
+
+        # Platt (sigmoid) calibrator fit on OOF scores: robust for rare events
+        calibrator = LogisticRegression(C=1.0, solver="lbfgs", max_iter=1000)
+        calibrator.fit(to_logit(oof_raw), y)
+
+        def calibrate(p):
+            if len(p) == 0:
+                return p
+            return calibrator.predict_proba(to_logit(p))[:, 1]
+
+        train_pred = calibrate(oof_raw)
+
+        # final model on ALL training data, used to score the test seasons
+        final_model = make_model(spw)
+        final_model.fit(X, y)
+        test_pred = calibrate(final_model.predict_proba(X_test)[:, 1])
+
+        ap = average_precision_score(y, oof_raw)
+        auc = roc_auc_score(y, oof_raw)
+        brier = brier_score_loss(y, train_pred)
+        print(f"[{name}] pos = {n_pos} / {len(y)} (base {y.mean():.4f}), spw = {spw:.2f} | "
+              f"AUC-PR = {ap:.4f} | AUC-ROC = {auc:.4f} | Brier = {brier:.5f} | "
+              f"mean pred = {train_pred.mean():.4f}")
+
+        df_train[pred_col] = train_pred
+        df_test[pred_col] = test_pred
+
+    pred_cols = []
+    for name in tier_names:
+        fit_tier(name)
+        pred_cols.append("pred_" + name.replace(" ", "_"))
+
+    # ---- enforce monotonicity: tiers are nested (rotation >= starter >= all star
+    # >= all nba >= mvp), so each probability must be <= the previous tier's. Take
+    # the row-wise cumulative minimum across the ordered tiers for both frames. ----
+    for frame in (df_train, df_test):
+        mono = np.minimum.accumulate(frame[pred_cols].to_numpy(dtype=float), axis=1)
+        frame[pred_cols] = mono
+
+    train_out = df_train[["pid", "player", "team", "season", "dpm"] + tier_names + pred_cols]
+    test_out = df_test[["pid", "player", "team", "season"] + pred_cols]
+    return train_out, test_out
+
+
 #%% get latest nba stats
 nba_stats = extract_nba_stats(latest_season)
 #draft_outcomes = outcomes(nba_stats)
@@ -1784,12 +1863,12 @@ def hyperparameter_tuning(n):
 
 #pcomps = player_comp_analysis(134193, latest_season, player_stats.copy(), nba_stats.copy(), correl_weights.copy(), 1) #Darryn Peterson
 
-draft_list = mdist_list(latest_season, player_stats.copy(), correl_weights.copy(), 0, 0)
+#draft_list = mdist_list(latest_season, player_stats.copy(), correl_weights.copy(), 0, 0)
 
 #clustered_list = clustering(2016,2026,9)
 
 #validation = model_accuracy_measurement(nba_stats,2014,latest_season-1,'results_alt')
 
-#train,test = regression_draft_model(nba_stats.copy(),data.copy(),player_stats.copy(),latest_season-5)
+train,test = regression_draft_model(nba_stats.copy(),data_full.copy(),player_stats.copy(),latest_season-1)
 
 #full_summary, full_results = hyperparameter_tuning(500)
