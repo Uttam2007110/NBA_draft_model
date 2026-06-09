@@ -46,7 +46,7 @@ path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
 #path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 #%% choose season to run
-latest_season = 2018
+latest_season = 2025
 
 #%% team ratings
 def team_ratings():
@@ -368,8 +368,7 @@ def extract_player_stats():
         
         #interaction effects
         data_adj['feel'] = data_adj['FT%'].rank(pct=True)*data_adj['ast/tov'].rank(pct=True) #*data_adj['hgt']
-        data_adj['bds'] = (data_adj['TO%']/data_adj['usg'])
-        data_adj['hgt_3par'] = data_adj['hgt'].rank(pct=True) + data_adj['3par'].rank(pct=True)
+        data_adj['bds'] = data_adj['usg'].rank(pct=True)-data_adj['TO%'].rank(pct=True)
         data_adj['jimmy'] = (data_adj['ORB%'].rank(pct=True) + data_adj['STL%'].rank(pct=True) - data_adj['TO%'].rank(pct=True))
         data_adj['stocks'] = (data_adj['BLK%']+data_adj['STL%'])/data_adj['hgt']
         data_adj['oreb_share'] = data_adj['ORB%'].rank(pct=True)/(data_adj['DRB%'].rank(pct=True)+data_adj['ORB%'].rank(pct=True)+0.00001)
@@ -381,13 +380,13 @@ def extract_player_stats():
         unadj_p_stats.append(data_adj.copy())
         
         for x in ['ORB%','DRB%','BLK%','blk_share','STL%','stl_share','AST%','TO%','ast/tov',
-                  'bds','TS_ast','hgt_3par','stocks','oreb_share']: #'oreb_share','hgt_3par','feel','jimmy'
+                  'bds','TS_ast','stocks','oreb_share']: #'oreb_share','hgt_3par','feel','jimmy'
             data_adj = log_adjust(data_adj,x)
         for x in ['usg','ftr','rimar','midar','3par','rim%','mid%','pfr','3P%','3P%_regressed','2P%',
                   '3prof','2par','rimprof','midprof','ORtg','drtg','bpm','bpm_adj']:
             data_adj = iqr_column(data_adj,x)
         for x in ['mp','GP','dunkar','dunkasst','rimasst','midasst','3Passt','FT%',
-                  'feel','short','guard','wing','big']:
+                  'feel','guard','wing','big']:
             data_adj = norm_inv_column(data_adj,x)
         p_stats.append(data_adj)
         i+=1
@@ -412,6 +411,7 @@ data.reset_index(drop=True,inplace=True)
 player_stats.reset_index(drop=True,inplace=True)
 
 data = data.merge(team_ranking, left_on=['team','season'], right_on=['team','season'], how='left')
+data['adj_rating_50'] = np.where(data['adj_rating']<0.5,1,0)
 #data.drop(['rating','sos'], axis=1, inplace=True)
 
 #%% fix pids of players in both real GM and bart torvik
@@ -469,7 +469,7 @@ correl_columns = ['age', 'class', 'hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', '
                   #'BLK%','STL%','dunkar','rimprof','midprof','3prof','bpm_adj','role' , 'adj_rating'
                   'dunkar','rimar', 'rim%', 'midar', 'mid%', '3par', '3P%_regressed', 'bpm','ORtg','drtg','mp',
                   'role','rimasst','midasst','bpm_adj',
-                  'feel','stocks',
+                  'feel','stocks','bds','adj_rating_50',
                   'age_bpm','age_usg','age_ftr', 'age_ORtg',
                   'hgt_TO%','hgt_ast/tov', 'hgt_3par', 'hgt_stl_share', 'hgt_bpm_adj']
 
@@ -483,7 +483,7 @@ interaction_columns = ['age_usg', 'age_ORB%', 'age_DRB%', 'age_AST%', 'age_TO%',
 
 
 data[correl_columns] = data_imputation_08_09(data[correl_columns].copy())
-data_full = data[list(set(correl_columns+interaction_columns+['adj_rating']))]
+data_full = data[list(set(correl_columns+interaction_columns+['adj_rating','short']))]
 
 #correl_columns = correl_columns + interaction_columns
 data = data[correl_columns] 
@@ -493,8 +493,9 @@ scaler.fit(data)
 data = scaler.transform(data)
 data = pd.DataFrame(data, columns=correl_columns)
 
-correlation_matrix = data.corr()
+#correlation_matrix = data.corr()
 #plot_histograms(data)
+print() #linebreak post imputation
 
 #%% correlation matrix weights
 def get_analytical_weights(X):
@@ -518,16 +519,15 @@ def get_analytical_weights(X):
     
     #v5, rimasst, midasst and interaction terms
     optimal_weights = [1,1.15,0.9,1,0.95,1,1,1.05,0.95,1.05,1,1,1,1,1,1,1,1,1,0.9,1.25,1.05,0.9,1.1, 1,1,1,1, 
-                       1.15,0.9,
-                       1,1,1,1,
-                       1,1,1,1,1] #+ 34 * [1]
+                       1.15,0.9,0.9,0.75] + 9 * [0.9]
     
     #v6, post grid search after adding interaction terms
     """
     optimal_weights = [0.5, 0.5, 1.0, 1.5, 0.75, 0.9, 0.9, 0.9, 0.75, 0.75, 0.5, 0.9, 0.75, 0.75, 
                        0.5, 0.75, 1.1, 1.5, 0.75, 1.5, 0.5, 1.0, 1.5, 1.0, 1.0, 0.9, 0.75, 1.25, 
-                       1.0, 1.5, 0.5, 1.5, 0.9, 1.25, 1.1, 1.0, 1.1, 1.1, 1.5]
-    """
+                       1.0, 1.5, 0.9, 0.75,
+                       0.5, 1.5, 0.9, 1.25, 1.1, 1.0, 1.1, 1.1, 1.5]
+    """    
     return np.array(optimal_weights)
 
 def get_analytical_weights_randomized(X,i):
@@ -669,90 +669,7 @@ def p_nba_scaling(league_stats,p_stats):
     
     return scale
 
-def fit_ml_model(p_stats):
-    import xgboost as xgb
-    from sklearn.calibration import CalibratedClassifierCV
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import accuracy_score
-    
-    data_copy2 = p_stats[p_stats['season']<latest_season-3]
-    
-    columns_considered = ['age','class', 'hgt', 'usg', 'TS%', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'blk_share', 'stl_share','BLK%', 'STL%',
-                          'ftr', 'FT%', '3par', '3P%', '3P%_regressed', 'bpm', 'ORtg', 'drtg', 'mp', 'role', 'adj_rating', 'intl',
-                          #'adj_rating_20','adj_rating_40','adj_rating_60','adj_rating_80','adj_rating_90',
-                          'feel','stocks','short',
-                          'age_bpm','age_usg','age_ftr', 'age_ORtg',
-                          'hgt_TO%','hgt_ast/tov', 'hgt_3par', 'hgt_stl_share', 'hgt_bpm_adj']
-    
-    X = data_copy2[columns_considered]
-    y = data_copy2['made_nba']
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
-    
-    scaling = (len(X)-y.sum())/y.sum()
-    
-    model = xgb.XGBClassifier(objective='binary:logistic', n_estimators=400, max_depth=4, learning_rate=0.03, 
-                              eval_metric='aucpr', tree_method='hist', min_child_weight=5, subsample=0.85, 
-                              colsample_bytree=0.7, reg_lambda=2.0, scale_pos_weight=scaling, max_delta_step=1)
-    
-    #model = xgb.XGBClassifier(n_estimators=100, max_depth=3, learning_rate=0.1, scale_pos_weight=scaling, max_delta_step=1) #objective='reg:logistic'
-    #model = xgb.XGBRegressor(objective='reg:logistic', eval_metric='logloss', n_estimators=100, learning_rate=0.1)
-    model.fit(X_train, y_train)
-    
-    preds = model.predict(X_test)
-    print("p_nba model accuracy on the test set",accuracy_score(y_test, preds))
-    
-    calibrated_model = CalibratedClassifierCV(
-        estimator=model,
-        method="isotonic",  #"sigmoid"
-        cv=5
-    )
-    calibrated_model.fit(X_train, y_train)
-
-    probabilities = calibrated_model.predict_proba(p_stats[columns_considered])
-    p_stats['pred'] = probabilities[:,1]
-    probabilities2 = model.predict_proba(p_stats[columns_considered])
-    p_stats['pred_big'] = probabilities2[:,1]
-    
-    #nuke short guys p_nba
-    p_stats['pred'] = np.where(p_stats['hgt']<72,p_stats['pred']*0.5,p_stats['pred'])
-    p_stats['pred_big'] = np.where(p_stats['hgt']<72,p_stats['pred_big']*0.5,p_stats['pred_big'])
-    
-    p_stats = p_stats[['player','age','pid', 'team','season','class', 'hgt','GP', 'mp','usg', 'TS%','ORB%','DRB%', 
-                       'AST%','TO%', 'ast/tov','BLK%', 'blk_share','STL%', 'stl_share','pfr', 'ftr','FT%', 'dunkar',
-                       'rimar', 'rim%','midar','mid%','3par', '3P%','ORtg', 'drtg','bpm','2par', '2P%','bpm_adj', 
-                       'dunkasst','rimasst', 'midasst','3Passt','role','3p_regress_val', '3P%_regressed',
-                       'adj_rating','made_nba', 'GP_adj', 'pred', 'pred_big', 'mp_p', 'intl']]
-    return p_stats
-
-def p_nba_player(p_stats,data_copy,league_stats):        
-    made_nba = league_stats[['pid']].drop_duplicates()
-    #made_nba['season'] = made_nba['season_x'] - 1
-    made_nba = made_nba.dropna()
-    made_nba['made_nba'] = 1
-    
-    p_stats = p_stats.merge(made_nba, on=['pid'], how='left') #season
-    p_stats['made_nba'] = p_stats['made_nba'].fillna(0)
-    p_stats.loc[(p_stats['GP']<15)&(p_stats['mp']<15),'made_nba'] = 0
-    #p_stats['made_nba'] *= p_stats['Mins_x']/p_stats['Mins_y']
-    
-    #p_stats['adj_rating'] = data_copy['adj_rating'].rank(pct=True)
-    p_stats = p_stats.merge(team_ranking, on=['team','season'], how='left')
-    p_stats[['ORtg','drtg','adj_rating']] = data_imputation_08_09(p_stats[['ORtg','drtg','adj_rating']])
-    #p_stats['adj_rating_20'] = np.where(((p_stats['adj_rating']>=0.2) & (p_stats['adj_rating']<0.4)),1,0)
-    #p_stats['adj_rating_40'] = np.where(((p_stats['adj_rating']>=0.4) & (p_stats['adj_rating']<0.6)),1,0)
-    #p_stats['adj_rating_60'] = np.where(((p_stats['adj_rating']>=0.6) & (p_stats['adj_rating']<0.8)),1,0)
-    #p_stats['adj_rating_80'] = np.where(((p_stats['adj_rating']>=0.8) & (p_stats['adj_rating']<0.9)),1,0)
-    #p_stats['adj_rating_90'] = np.where((p_stats['adj_rating']>=0.9),1,0) #|(p_stats['intl']==1)
-
-    
-    p_stats['GP_adj'] = np.where(p_stats['intl']==0,p_stats['GP'],40)
-    p_stats['GP_adj'] = np.where(p_stats['GP_adj']<10,0,1)
-    p_stats['season'] = p_stats['season']
-    
-    p_stats = fit_ml_model(p_stats)
-    return p_stats
-
-#%% random forest based model
+#%% ml model
 def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season_end):
     import numpy as np
     import xgboost as xgb
@@ -840,6 +757,7 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
                   f"using base rate {base:.5f}")
             df_train[pred_col] = base
             df_test[pred_col] = base
+            df_test[pred_col] = np.where(df_test['short']>=1,base/2,base)
             return
 
         # The full neg/pos ratio over-inflates and overfits the rare class; since we
@@ -880,21 +798,20 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
               f"mean pred = {train_pred.mean():.4f}")
 
         df_train[pred_col] = train_pred
-        df_test[pred_col] = test_pred
+        #df_test[pred_col] = test_pred
+        df_test[pred_col] = np.where(df_test['short']>=1,test_pred/2,test_pred)
 
     pred_cols = []
     for name in tier_names:
         fit_tier(name)
         pred_cols.append("pred_" + name.replace(" ", "_"))
 
-    # ---- enforce monotonicity: tiers are nested (rotation >= starter >= all star
-    # >= all nba >= mvp), so each probability must be <= the previous tier's. Take
-    # the row-wise cumulative minimum across the ordered tiers for both frames. ----
+    # probability must be <= the previous tier's
     for frame in (df_train, df_test):
         mono = np.minimum.accumulate(frame[pred_cols].to_numpy(dtype=float), axis=1)
         frame[pred_cols] = mono
 
-    # ---- continuous dpm regression alongside the binary tiers ----
+    #continuous dpm regression alongside the binary tiers
     y_reg = df_train["dpm"].to_numpy(dtype=float)
 
     def make_regressor():
@@ -944,10 +861,30 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
 #%% get latest nba stats
 nba_stats = extract_nba_stats(latest_season)
 #draft_outcomes = outcomes(nba_stats)
-correl_weights = get_analytical_weights(data)
-rotation_scale_factor = p_nba_scaling(nba_stats,player_stats)
 
-player_stats = p_nba_player(player_stats.copy(),data.copy(),nba_stats)
+correl_weights = get_analytical_weights(data)
+#rotation_scale_factor = p_nba_scaling(nba_stats,player_stats)
+
+print("ML model summary")
+_,test = regression_draft_model(nba_stats.copy(),data_full.copy(),player_stats.copy(),latest_season-2)
+
+test_reduced = test[['pid', 'player', 'team', 'season', 'pred_makes_NBA']]
+test_reduced = test_reduced.rename(columns={"pred_makes_NBA": "pred"})
+player_stats = player_stats.merge(test_reduced, on=['player','pid', 'team','season'], how='left')
+
+made_nba = nba_stats[['pid']].drop_duplicates()
+made_nba = made_nba.dropna()
+made_nba['made_nba'] = 1
+player_stats = player_stats.merge(made_nba, on=['pid'], how='left') #season
+player_stats['made_nba'] = player_stats['made_nba'].fillna(0)
+
+player_stats = player_stats[['player','age','pid', 'team','season','class', 'hgt','GP', 'mp','usg', 'TS%','ORB%','DRB%', 
+                   'AST%','TO%', 'ast/tov','BLK%', 'blk_share','STL%', 'stl_share','pfr', 'ftr','FT%', 'dunkar',
+                   'rimar', 'rim%','midar','mid%','3par', '3P%','ORtg', 'drtg','bpm','2par', '2P%','bpm_adj', 
+                   'dunkasst','rimasst', 'midasst','3Passt','role','3p_regress_val', '3P%_regressed',
+                   'made_nba', 'pred', 'mp_p', 'intl']]
+
+del test_reduced,made_nba
 
 #%% mahalanobis distance algo
 def distance2(pid, yr, full_matrix, data_copy, weights_copy, print_df):
@@ -1546,17 +1483,16 @@ def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
     
     tot_comps = len(dist)
     
-    try:
-        p_nba2 = nba_comps/tot_comps
-        
+    try:        
         if(p_intl == 0 and p_gp <= 10): padding = np.exp(-((1-min(p_gp/25,1))))
         else: padding = 1
 
         p_nba1 = p_stats.loc[(p_stats['pid']==x)&(p_stats['season']==year),'pred'].values[0]
-        p_nba0 = p_stats.loc[(p_stats['pid']==x)&(p_stats['season']==year),'pred_big'].values[0]
+        #p_nba0 = p_stats.loc[(p_stats['pid']==x)&(p_stats['season']==year),'pred_big'].values[0]
+        p_nba2 = nba_comps/tot_comps
         #p_nba = calibrated_probability(nba_comps * padding, tot_comps) * rotation_scale_factor
         
-        p_nba =  0.3*p_nba0*padding + 0.5*p_nba1*padding + 0.2*p_nba2*padding #rotation_scale_factor
+        p_nba =  0.95*p_nba1*padding + 0.05*p_nba2*padding #0*p_nba0*padding
         #p_nba *= np.exp((p_nba-1)/2.5) # padding * rotation_scale_factor
         if(p_nba>=1): p_nba = 1
         
@@ -1567,26 +1503,26 @@ def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
     #try: non_nba_comps = int((len(off_comps)/p_nba) - len(off_comps))
     #except ZeroDivisionError: non_nba_comps = tot_comps
     
-    N = 150 #int(np.log(len(p_stats)/18000)*80) #int(90/rotation_scale_factor) #35
-    N2 = 5 #35
+    N = 150 #int(np.log(len(p_stats)/18000)*60) #int(90/rotation_scale_factor) #35
+    N2 = 10 #35
     replacements = int(max(N2-len(off_comps),2))
     
     comps_list = off_comps.to_list() + [-3] * replacements
     try: comps_list = np.partition(comps_list, -N)[-N:]
     except ValueError: comps_list
     
-    skewness_off = skew(comps_list) #np.exp(-replacements/N2)
-    kurtosis_off = scipy.stats.kurtosis(comps_list)
-    variance_off = np.var(comps_list)
+    skewness_off = skew(comps_list) *np.exp(min(1.5*p_nba2-1,0))
+    kurtosis_off = scipy.stats.kurtosis(comps_list) *np.exp(min(1.5*p_nba2-1,0))
+    variance_off = np.var(comps_list) *np.exp(min(1.5*p_nba2-1,0))
     mean_off = np.mean(comps_list)
     
     comps_list = def_comps.to_list() + [-2] * replacements
     try: comps_list = np.partition(comps_list, -N)[-N:]
     except ValueError: comps_list
     
-    skewness = skew(comps_list)
-    kurtosis = scipy.stats.kurtosis(comps_list)
-    variance = np.var(comps_list)
+    skewness = skew(comps_list) *np.exp(min(1.5*p_nba2-1,0))
+    kurtosis = scipy.stats.kurtosis(comps_list) *np.exp(min(1.5*p_nba2-1,0))
+    variance = np.var(comps_list) *np.exp(min(1.5*p_nba2-1,0))
     mean = np.mean(comps_list)
     
     try: cor = off_comps.corr(def_comps)
@@ -1698,18 +1634,18 @@ def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
             #p_95 = round(np.percentile(distribution, 95),2)
             
             p_nba = round(p_nba,2)
-            p_nba0 = round(p_nba0,2)
+            #p_nba0 = round(p_nba0,2)
             p_nba1 = round(p_nba1,2)
             p_nba2 = round(p_nba2,2)
             
             if(p_class < 1):
-                print(p_name,int(year),p_nba0,p_nba1,p_nba2,"HS equivalent season, excluded")
+                print(p_name,int(year),p_nba1,p_nba2,"HS equivalent season, excluded")
                 return [p_name, x, team, p_class, p_age, year, p_weight, []]
             elif(len(distribution)==0):
-                print(p_name,int(year),p_weight,p_nba0,p_nba1,p_nba2,"No NBA comps")
+                print(p_name,int(year),p_weight,p_nba1,p_nba2,"No NBA comps")
                 return [p_name, x, team, p_class, p_age, year, p_weight, np.full(1, -5.0, dtype=float)]
             else:
-                print(p_name,int(year),p_weight,p_nba0,p_nba1,p_nba2,meand)
+                print(p_name,int(year),p_weight,p_nba1,p_nba2,meand)
                 return [p_name, x, team, p_class, p_age, year, p_weight, distribution]
         
         except:
@@ -1901,6 +1837,45 @@ def hyperparameter_tuning(n):
     full_draft_list = list_to_df(full_draft_list)
     return full_draft_results, full_draft_list
 
+#%% ensemble model
+def ensemble_draft_model(draft_list2,w,flag):
+    draft_list = mdist_list(latest_season, player_stats.copy(), correl_weights.copy(), 0, flag)
+    #_,draft_list2 = regression_draft_model(nba_stats.copy(),data_full.copy(),player_stats.copy(),latest_season-2)
+    
+    draft_list = draft_list.reset_index()
+    draft_list_full = draft_list.merge(draft_list2, on=['pid','player','team','season'], how='left')
+
+    draft_list_full['mean DPM'] = w*draft_list_full['mean DPM'] + (1-w)*draft_list_full['pred_dpm']
+    draft_list_full['makes NBA'] = w*draft_list_full['makes NBA'] + (1-w)*draft_list_full['pred_makes_NBA']
+    draft_list_full['rotation'] = w*draft_list_full['rotation'] + (1-w)*draft_list_full['pred_rotation']
+    draft_list_full['starter'] = w*draft_list_full['starter'] + (1-w)*draft_list_full['pred_starter']
+    draft_list_full['all star'] = w*draft_list_full['all star'] + (1-w)*draft_list_full['pred_all_star']
+    draft_list_full['all nba'] = w*draft_list_full['all nba'] + (1-w)*draft_list_full['pred_all_nba']
+    draft_list_full['mvp'] = w*draft_list_full['mvp'] + (1-w)*draft_list_full['pred_mvp']
+
+    draft_list_full = draft_list_full[['pid', 'player', 'team', 'age', 'season', 'mean DPM', 'makes NBA', 'rotation',
+                                       'starter', 'all star', 'all nba', 'mvp', 'P5 DPM', 'median DPM', 'P95 DPM']]
+    
+    draft_list_full['makes NBA'] = round(draft_list_full['makes NBA'],4)
+    draft_list_full['rotation'] = round(draft_list_full['rotation'],4)
+    draft_list_full['starter'] = round(draft_list_full['starter'],4)
+    draft_list_full['all star'] = round(draft_list_full['all star'],4)
+    draft_list_full['all nba'] = round(draft_list_full['all nba'],4)
+    draft_list_full['mvp'] = round(draft_list_full['mvp'],4)
+    draft_list_full['mean DPM'] = round(draft_list_full['mean DPM'],2)
+    
+    print()
+    print("Ensemble model summary")
+    print()
+    print("nba caliber players",round(draft_list_full['makes NBA'].sum(),2))
+    print("rotation caliber players",round(draft_list_full['rotation'].sum(),2))
+    print("starter caliber players",round(draft_list_full['starter'].sum(),2))
+    print("all star caliber players",round(draft_list_full['all star'].sum(),2))
+    print("all nba caliber players",round(draft_list_full['all nba'].sum(),2))
+    print("mvp claiber players",round(draft_list_full['mvp'].sum(),2))
+    print()
+    return draft_list_full
+
 #%% call the player comparision function
 
 #pcomps = player_comp_analysis(134193, latest_season, player_stats.copy(), nba_stats.copy(), correl_weights.copy(), 1) #Darryn Peterson
@@ -1911,6 +1886,6 @@ def hyperparameter_tuning(n):
 
 #validation = model_accuracy_measurement(nba_stats,2014,latest_season-1,'results_alt')
 
-train,test = regression_draft_model(nba_stats.copy(),data_full.copy(),player_stats.copy(),latest_season-1)
-
 #full_summary, full_results = hyperparameter_tuning(500)
+
+draft_list = ensemble_draft_model(test,0.5,0) #weight to mdist model, full vs representative
