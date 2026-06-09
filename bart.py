@@ -756,7 +756,7 @@ def p_nba_player(p_stats,data_copy,league_stats):
 def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season_end):
     import numpy as np
     import xgboost as xgb
-    from sklearn.model_selection import StratifiedKFold
+    from sklearn.model_selection import StratifiedKFold, KFold
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import average_precision_score, roc_auc_score, brier_score_loss
 
@@ -894,10 +894,52 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
         mono = np.minimum.accumulate(frame[pred_cols].to_numpy(dtype=float), axis=1)
         frame[pred_cols] = mono
 
-    train_out = df_train[["pid", "player", "team", "season", "dpm"] + tier_names + pred_cols]
-    test_out = df_test[["pid", "player", "team", "season"] + pred_cols]
-    return train_out, test_out
+    # ---- continuous dpm regression alongside the binary tiers ----
+    y_reg = df_train["dpm"].to_numpy(dtype=float)
 
+    def make_regressor():
+        return xgb.XGBRegressor(
+            objective="reg:squarederror",
+            n_estimators=600,
+            learning_rate=0.02,
+            max_depth=4,
+            min_child_weight=8,
+            subsample=0.8,
+            colsample_bytree=0.6,
+            reg_lambda=3.0,
+            reg_alpha=0.5,
+            gamma=1.0,
+            eval_metric="rmse",
+            tree_method="hist",
+            random_state=42,
+        )
+
+    # leak-free out-of-fold dpm predictions on TRAIN (continuous target)
+    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    oof_dpm = np.zeros(len(y_reg), dtype=float)
+    for tr_idx, va_idx in kf.split(X):
+        r = make_regressor()
+        r.fit(X[tr_idx], y_reg[tr_idx])
+        oof_dpm[va_idx] = r.predict(X[va_idx])
+
+    # final regressor on ALL training data, used to score the test seasons
+    final_regressor = make_regressor()
+    final_regressor.fit(X, y_reg)
+    test_dpm = final_regressor.predict(X_test)
+
+    rmse = float(np.sqrt(np.mean((oof_dpm - y_reg) ** 2)))
+    mae = float(np.mean(np.abs(oof_dpm - y_reg)))
+    ss_res = float(np.sum((y_reg - oof_dpm) ** 2))
+    ss_tot = float(np.sum((y_reg - y_reg.mean()) ** 2))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+    print(f"[dpm reg] RMSE = {rmse:.4f} | MAE = {mae:.4f} | R2 = {r2:.4f}")
+
+    df_train["pred_dpm"] = oof_dpm
+    df_test["pred_dpm"] = test_dpm
+
+    train_out = df_train[["pid", "player", "team", "season", "dpm", "pred_dpm"] + tier_names + pred_cols]
+    test_out = df_test[["pid", "player", "team", "season", "pred_dpm"] + pred_cols]
+    return train_out, test_out
 
 #%% get latest nba stats
 nba_stats = extract_nba_stats(latest_season)
