@@ -13,10 +13,6 @@ import scipy.stats
 from scipy.stats import norm
 from scipy.stats import skew
 from scipy.optimize import fsolve
-#from scipy.spatial.distance import cdist
-from scipy.optimize import minimize_scalar
-from scipy.stats import jf_skew_t
-from scipy.optimize import minimize
 from scipy.stats import zscore
 
 from sklearn.experimental import enable_iterative_imputer
@@ -26,8 +22,6 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score
-from sklearn.preprocessing import QuantileTransformer
-from sklearn.covariance import LedoitWolf
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import PercentFormatter
@@ -42,8 +36,8 @@ from pandas.errors import SettingWithCopyWarning
 warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 pd.set_option('mode.chained_assignment', None)
 
-#path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
-path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
+path = "C:/Users/uttam/Desktop/Sports/basketball/bart"
+#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/basketball/bart"
 
 #%% choose season to run
 latest_season = 2026
@@ -145,7 +139,7 @@ def height_based_roles(df):
     #gaussian roles
     import scipy.stats as stats
     df['hgt'] = df['hgt'].fillna(60) #verify this
-    df['short'] = np.where(df['hgt']<72,1,0)
+    df['short'] = stats.norm.cdf(72, loc=df["hgt"], scale=1) #np.where(df['hgt']<72,1,0)
     df['guard'] = stats.norm.cdf(78, loc=df["hgt"], scale=1) - stats.norm.cdf(72, loc=df["hgt"], scale=1)
     df['wing'] = stats.norm.cdf(82, loc=df["hgt"], scale=1) - stats.norm.cdf(76, loc=df["hgt"], scale=1)
     df['big'] = 1 - stats.norm.cdf(82, loc=df["hgt"], scale=1)
@@ -466,19 +460,14 @@ def pivot_data(df,df2):
 
 #%% correlation matrix for all the stats under consideration
 correl_columns = ['age', 'class', 'hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'blk_share','stl_share', 'ftr','FT%', 
-                  #'BLK%','STL%','dunkar','rimprof','midprof','3prof','bpm_adj','role' , 'adj_rating'
                   'dunkar','rimar', 'rim%', 'midar', 'mid%', '3par', '3P%_regressed', 'bpm','ORtg','drtg','mp',
                   'role','rimasst','midasst','bpm_adj',
                   'feel','stocks','oreb_share','adj_rating_50']
-                  #'age_bpm','age_usg','age_ftr', 'age_ORtg',
-                  #'hgt_TO%','hgt_ast/tov', 'hgt_3par', 'hgt_stl_share', 'hgt_bpm_adj']
-
                   
 interaction_columns = ['age_usg', 'age_ORB%', 'age_DRB%', 'age_AST%', 'age_TO%', 'age_ast/tov', 'age_ftr', 'age_FT%', 'age_bpm', 
                        'age_bpm_adj', 'age_mp', 'age_3par', 'age_3P%_regressed', 'age_blk_share', 'age_stl_share', 'age_TS%',
                        'hgt_usg', 'hgt_ORB%', 'hgt_DRB%', 'hgt_AST%', 'hgt_TO%', 'hgt_ast/tov', 'hgt_ftr', 'hgt_FT%', 'hgt_bpm', 
-                       'hgt_bpm_adj', 'hgt_mp', 'hgt_3par', 'hgt_3P%_regressed', 'hgt_blk_share', 'hgt_stl_share', 'hgt_TS%',]
-
+                       'hgt_bpm_adj', 'hgt_mp', 'hgt_3par', 'hgt_3P%_regressed', 'hgt_blk_share', 'hgt_stl_share', 'hgt_TS%']
 
 data[correl_columns] = data_imputation_08_09(data[correl_columns].copy())
 data_full = data[list(set(correl_columns+interaction_columns+['adj_rating','short']))]
@@ -493,6 +482,7 @@ data = pd.DataFrame(data, columns=correl_columns)
 
 #correlation_matrix = data.corr()
 #plot_histograms(data)
+
 print() #linebreak post imputation
 
 #%% correlation matrix weights
@@ -517,15 +507,9 @@ def get_analytical_weights(X):
     
     #v5, rimasst, midasst and interaction terms
     optimal_weights = [1,1.15,0.9,1,0.95,1,1,1.05,0.95,1.05,1,1,1,1,1,1,1,1,1,0.9,1.25,1.05,0.9,1.1, 1,1,1,1, 
-                       1.15,0.9,0.9,0.75] #+ 9 * [0.9]
+                       1.15,0.9,0.9,0.75]
     
-    #v6, post grid search after adding interaction terms
-    """
-    optimal_weights = [0.5, 0.5, 1.0, 1.5, 0.75, 0.9, 0.9, 0.9, 0.75, 0.75, 0.5, 0.9, 0.75, 0.75, 
-                       0.5, 0.75, 1.1, 1.5, 0.75, 1.5, 0.5, 1.0, 1.5, 1.0, 1.0, 0.9, 0.75, 1.25, 
-                       1.0, 1.5, 0.9, 0.75,
-                       0.5, 1.5, 0.9, 1.25, 1.1, 1.0, 1.1, 1.1, 1.5]
-    """    
+    #v6, post grid search after adding interaction terms  
     return np.array(optimal_weights)
 
 def get_analytical_weights_randomized(X,i):
@@ -754,8 +738,7 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
             print(f"[{name}] positives = {n_pos} / {len(y)} -> too few to model; "
                   f"using base rate {base:.5f}")
             df_train[pred_col] = base
-            #df_test[pred_col] = base
-            df_test[pred_col] = np.where(df_test['short']>=1,base/2,base)
+            df_test[pred_col] = base
             return
 
         # The full neg/pos ratio over-inflates and overfits the rare class; since we
@@ -795,9 +778,9 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
               f"AUC-PR = {ap:.4f} | AUC-ROC = {auc:.4f} | Brier = {brier:.5f} | "
               f"mean pred = {train_pred.mean():.4f}")
 
-        df_train[pred_col] = train_pred
-        #df_test[pred_col] = test_pred
-        df_test[pred_col] = np.where(df_test['short']>=1,test_pred/2,test_pred)
+        df_train[pred_col] = train_pred * (1-df_train['short']/1.5)
+        df_test[pred_col] = test_pred * (1-df_test['short']/1.5)
+        #df_test[pred_col] = np.where(df_test['short']>=1,test_pred/2,test_pred)
 
     pred_cols = []
     for name in tier_names:
@@ -998,11 +981,9 @@ def skewed_normal_distributions(n_samples, off_mean, off_std, off_skew, off_kurt
     if(def_kurt > 5): def_kurt = 5
     
     try: 
-        #off_a = minimize_scalar(skew_kurt_error, args=(off_skew, off_kurt), method='bounded', bounds=[-1e10, 1e10])
         off_a = get_a_from_skew(off_skew)
     except: off_a = 0
     try: 
-        #def_a = minimize_scalar(skew_kurt_error, args=(def_skew, def_kurt), method='bounded', bounds=[-1e10, 1e10])
         def_a = get_a_from_skew(def_skew)
     except: def_a = 0
             
@@ -1808,10 +1789,10 @@ def hyperparameter_tuning(n):
                                 draft_list['a_rotation'].sum(),draft_list['a_all star'].sum(),draft_list['rotation'].sum(),draft_list['all star'].sum(),
                                 draft_list['dpm'].corr(draft_list['mean DPM']),
                                 np.sqrt(((draft_list['dpm'] - draft_list['mean DPM']) ** 2).mean()),
-                                spearmanr(draft_list['a_rotation'], draft_list['rotation'])[0],
-                                spearmanr(draft_list['a_all star'], draft_list['all star'])[0],
-                                kendalltau(draft_list['a_rotation'], draft_list['rotation'])[0],
-                                kendalltau(draft_list['a_all star'], draft_list['all star'])[0]])
+                                spearmanr(draft_list['a_rotation'], draft_list['mean DPM'])[0],
+                                spearmanr(draft_list['a_all star'], draft_list['mean DPM'])[0],
+                                kendalltau(draft_list['a_rotation'], draft_list['mean DPM'])[0],
+                                kendalltau(draft_list['a_all star'], draft_list['mean DPM'])[0]])
         
         full_draft_results.append(draft_list)
         i+=1
@@ -1868,6 +1849,6 @@ def ensemble_draft_model(draft_list2,w,flag):
 
 #validation = model_accuracy_measurement(nba_stats,2014,latest_season-1,'results_alt')
 
-#full_summary, full_results = hyperparameter_tuning(500)
+#full_summary, full_results = hyperparameter_tuning(60)
 
-draft_list = ensemble_draft_model(test,0.6,0) #weight to mdist model, full vs representative
+draft_list = ensemble_draft_model(test,0.6,1) #weight to mdist model, full vs representative
