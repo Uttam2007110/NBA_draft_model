@@ -792,35 +792,93 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
         mono = np.minimum.accumulate(frame[pred_cols].to_numpy(dtype=float), axis=1)
         frame[pred_cols] = mono
 
-    # ---- tier-consistent expected dpm derived from the monotone survival probs ----
-    # The six tier probabilities form a discrete survival function S(x)=P(dpm>x) over
-    # the breakpoints [-5,-1,0,1,2,4.5]. The layer-cake expectation
-    #     E[dpm] = floor + integral S(x) dx = -5 + sum_k width_k * p_k
-    # is monotone increasing in EVERY tier probability, so a high pred_dpm can only
-    # come from high upper-tier (all-star / all-nba / mvp) probabilities. This makes
-    # pred_dpm logically consistent with pred_all_star, pred_all_nba, etc. by
-    # construction (no independent regressor that can disagree with the tiers).
+    # derive dpm distribution moments/quantiles from tier probabilities
+    # Using monotone nested-tier probabilities as a discrete survival function,
+    # produce mean/median/quantiles consistent with tier preds.
     floor = -5.0
     dpm_cap = max(float(df_train["dpm"].max()), 4.5)
-    # segment widths between consecutive thresholds [-5, -1, 0, 1, 2, 4.5, cap],
-    # aligned to tier order [makes NBA, rotation, starter, all star, all nba, mvp]
-    seg_widths = np.array([4.0, 1.0, 1.0, 1.0, 2.5, dpm_cap - 4.5], dtype=float)
+    lo = np.array([-5.0, -1.0, 0.0, 1.0, 2.0, 4.5], dtype=float)
+    hi = np.array([-1.0, 0.0, 1.0, 2.0, 4.5, dpm_cap], dtype=float)
 
-    def expected_dpm(frame):
-        # pred_cols are in tier order and already enforced monotone (cumulative min)
+    def summarize_dpm_distribution(frame):
         surv = frame[pred_cols].to_numpy(dtype=float)
-        return floor + surv @ seg_widths
+        surv = np.clip(np.minimum.accumulate(surv, axis=1), 0.0, 1.0)
 
-    df_train["pred_dpm"] = expected_dpm(df_train)
-    df_test["pred_dpm"] = expected_dpm(df_test)
+        # atom at floor + segment masses between thresholds
+        atom = np.clip(1.0 - surv[:, 0], 0.0, 1.0)
+        seg_probs = np.column_stack([
+            surv[:, 0] - surv[:, 1],
+            surv[:, 1] - surv[:, 2],
+            surv[:, 2] - surv[:, 3],
+            surv[:, 3] - surv[:, 4],
+            surv[:, 4] - surv[:, 5],
+            surv[:, 5],
+        ])
+        seg_probs = np.clip(seg_probs, 0.0, None)
 
-    rmse = float(np.sqrt(np.mean((df_train["pred_dpm"].to_numpy() - df_train["dpm"].to_numpy()) ** 2)))
-    mae = float(np.mean(np.abs(df_train["pred_dpm"].to_numpy() - df_train["dpm"].to_numpy())))
-    print(f"[dpm expected] RMSE = {rmse:.4f} | MAE = {mae:.4f} "
-          f"| range = [{df_train['pred_dpm'].min():.2f}, {df_train['pred_dpm'].max():.2f}]")
+        # normalize for numerical stability
+        total = atom + seg_probs.sum(axis=1)
+        total = np.where(total > 0, total, 1.0)
+        atom = atom / total
+        seg_probs = seg_probs / total[:, None]
 
-    train_out = df_train[["pid", "player", "team", "season", "dpm", "pred_dpm"] + tier_names + pred_cols]
-    test_out = df_test[["pid", "player", "team", "season", "pred_dpm"] + pred_cols]
+        # mean under atom-at-floor + uniform-within-segment approximation
+        mids = 0.5 * (lo + hi)
+        mean = atom * floor + (seg_probs * mids).sum(axis=1)
+
+        def quantile(q):
+            out = np.empty(len(atom), dtype=float)
+            for i in range(len(atom)):
+                if q <= atom[i]:
+                    out[i] = floor
+                    continue
+                rem = q - atom[i]
+                for j in range(seg_probs.shape[1]):
+                    m = seg_probs[i, j]
+                    if rem <= m or j == seg_probs.shape[1] - 1:
+                        if m <= 1e-12:
+                            out[i] = lo[j]
+                        else:
+                            frac = min(max(rem / m, 0.0), 1.0)
+                            out[i] = lo[j] + frac * (hi[j] - lo[j])
+                        break
+                    rem -= m
+            return out
+
+        p05 = quantile(0.05)
+        p25 = quantile(0.25)
+        p50 = quantile(0.50)  # median
+        p75 = quantile(0.75)
+        p95 = quantile(0.95)
+        return mean, p05, p25, p50, p75, p95
+
+    tr_mean, tr_p05, tr_p25, tr_p50, tr_p75, tr_p95 = summarize_dpm_distribution(df_train)
+    te_mean, te_p05, te_p25, te_p50, te_p75, te_p95 = summarize_dpm_distribution(df_test)
+
+    # keep pred_dpm as backward-compatible alias for mean
+    df_train["pred_dpm"] = tr_mean
+    df_test["pred_dpm"] = te_mean
+    df_train["pred_dpm_mean"] = tr_mean
+    df_test["pred_dpm_mean"] = te_mean
+    df_train["pred_dpm_p05"] = tr_p05
+    df_test["pred_dpm_p05"] = te_p05
+    df_train["pred_dpm_p25"] = tr_p25
+    df_test["pred_dpm_p25"] = te_p25
+    df_train["pred_dpm_median"] = tr_p50
+    df_test["pred_dpm_median"] = te_p50
+    df_train["pred_dpm_p75"] = tr_p75
+    df_test["pred_dpm_p75"] = te_p75
+    df_train["pred_dpm_p95"] = tr_p95
+    df_test["pred_dpm_p95"] = te_p95
+
+    rmse = float(np.sqrt(np.mean((df_train["pred_dpm_mean"].to_numpy() - df_train["dpm"].to_numpy()) ** 2)))
+    mae = float(np.mean(np.abs(df_train["pred_dpm_mean"].to_numpy() - df_train["dpm"].to_numpy())))
+    med_ae = float(np.median(np.abs(df_train["pred_dpm_median"].to_numpy() - df_train["dpm"].to_numpy())))
+    print(f"[dpm dist] RMSE(mean) = {rmse:.4f} | MAE(mean) = {mae:.4f} | MedAE(median) = {med_ae:.4f}")
+
+    dpm_cols = ["pred_dpm", "pred_dpm_p05", "pred_dpm_p25", "pred_dpm_median", "pred_dpm_p75", "pred_dpm_p95"]
+    train_out = df_train[["pid", "player", "team", "season", "dpm"] + dpm_cols + tier_names + pred_cols]
+    test_out = df_test[["pid", "player", "team", "season"] + dpm_cols + pred_cols]
     return train_out, test_out
 
 #%% get latest nba stats
@@ -1653,7 +1711,7 @@ def mdist_list(year, p_stats, cor_weights, print_val, get_all_player_stats):
     tot_len = len(names_list)
     result = [['pid','player','team','class','age','season',
                'nba','rotation','starter','all star','all nba','mvp',
-               'P5 DARKO','P50 DARKO','P95 DARKO','mean DARKO']]
+               'P5 DARKO','P25 DARKO','P50 DARKO','P75 DARKO','P95 DARKO','mean DARKO']]
 
     if(print_val == 0):  p_stats = p_stats[p_stats['season'] <= year]
     grouped = p_stats[p_stats['season']==year].groupby('pid') #check if multiple seasons are needed
@@ -1695,8 +1753,12 @@ def mdist_list(year, p_stats, cor_weights, print_val, get_all_player_stats):
         
         try: p_5  = round(np.percentile(arr, 5), 2)
         except: p_5 = -5
+        try: p_25  = round(np.percentile(arr, 25), 2)
+        except: p_25 = -5
         try: p_50 = round(np.percentile(arr, 50), 2)
         except: p_50 = -5
+        try: p_75 = round(np.percentile(arr, 75), 2)
+        except: p_75 = -5
         try: p_95 = round(np.percentile(arr, 95), 2)
         except: p_95 = -5
         try: meand = round(arr.mean(), 2)
@@ -1733,20 +1795,20 @@ def mdist_list(year, p_stats, cor_weights, print_val, get_all_player_stats):
     print("mvp claiber players",round(pivot['mvp'].sum(),2))
     print()
     
-    pivot['P50 DARKO'] = round(pivot['P50 DARKO'],2)
-    pivot['P5 DARKO'] = round(pivot['P5 DARKO'],2)
-    pivot['P95 DARKO'] = round(pivot['P95 DARKO'],2)
-    pivot['mean DARKO'] = round(pivot['mean DARKO'],2)
+    #pivot['P50 DARKO'] = round(pivot['P50 DARKO'],2)
+    #pivot['P5 DARKO'] = round(pivot['P5 DARKO'],2)
+    #pivot['P95 DARKO'] = round(pivot['P95 DARKO'],2)
+    #pivot['mean DARKO'] = round(pivot['mean DARKO'],2)
     
-    pivot['nba'] = round(pivot['nba'],4)
-    pivot['rotation'] = round(pivot['rotation'],4)
-    pivot['starter'] = round(pivot['starter'],4)
-    pivot['all star'] = round(pivot['all star'],4)
-    pivot['all nba'] = round(pivot['all nba'],4)
-    pivot['mvp'] = round(pivot['mvp'],4)
+    #pivot['nba'] = round(pivot['nba'],4)
+    #pivot['rotation'] = round(pivot['rotation'],4)
+    #pivot['starter'] = round(pivot['starter'],4)
+    #pivot['all star'] = round(pivot['all star'],4)
+    #pivot['all nba'] = round(pivot['all nba'],4)
+    #pivot['mvp'] = round(pivot['mvp'],4)
     
-    pivot = pivot[['pid','player','team','age','season','mean DARKO','nba','rotation','starter','all star','all nba','mvp','P5 DARKO','P50 DARKO','P95 DARKO']]
-    pivot.columns = ['pid','player','team','age','season','mean DPM','makes NBA','rotation','starter','all star','all nba','mvp','P5 DPM','median DPM','P95 DPM']
+    pivot = pivot[['pid','player','team','age','season','mean DARKO','nba','rotation','starter','all star','all nba','mvp','P5 DARKO','P25 DARKO','P50 DARKO','P75 DARKO','P95 DARKO']]
+    pivot.columns = ['pid','player','team','age','season','mean DPM','makes NBA','rotation','starter','all star','all nba','mvp','P5 DPM','P25 DPM','median DPM','P75 DPM','P95 DPM']
     pivot = pivot.drop_duplicates(subset='pid')
     pivot = pivot.set_index('pid')
     print("total minutes for run",round((datetime.now()-start_time).total_seconds()/60,2))
@@ -1809,15 +1871,18 @@ def ensemble_draft_model(draft_list2,w,flag):
     draft_list_full = draft_list.merge(draft_list2, on=['pid','player','team','season'], how='left')
 
     draft_list_full['mean DPM'] = w*draft_list_full['mean DPM'] + (1-w)*draft_list_full['pred_dpm']
+    draft_list_full['P5 DPM'] = w*draft_list_full['P5 DPM'] + (1-w)*draft_list_full['pred_dpm_p05']
+    draft_list_full['P25 DPM'] = w*draft_list_full['P25 DPM'] + (1-w)*draft_list_full['pred_dpm_p25']
+    draft_list_full['median DPM'] = w*draft_list_full['median DPM'] + (1-w)*draft_list_full['pred_dpm_median']
+    draft_list_full['P75 DPM'] = w*draft_list_full['P75 DPM'] + (1-w)*draft_list_full['pred_dpm_p75']
+    draft_list_full['P95 DPM'] = w*draft_list_full['P95 DPM'] + (1-w)*draft_list_full['pred_dpm_p95']
+    
     draft_list_full['makes NBA'] = w*draft_list_full['makes NBA'] + (1-w)*draft_list_full['pred_makes_NBA']
     draft_list_full['rotation'] = w*draft_list_full['rotation'] + (1-w)*draft_list_full['pred_rotation']
     draft_list_full['starter'] = w*draft_list_full['starter'] + (1-w)*draft_list_full['pred_starter']
     draft_list_full['all star'] = w*draft_list_full['all star'] + (1-w)*draft_list_full['pred_all_star']
     draft_list_full['all nba'] = w*draft_list_full['all nba'] + (1-w)*draft_list_full['pred_all_nba']
     draft_list_full['mvp'] = w*draft_list_full['mvp'] + (1-w)*draft_list_full['pred_mvp']
-
-    draft_list_full = draft_list_full[['pid', 'player', 'team', 'age', 'season', 'mean DPM', 'makes NBA', 'rotation',
-                                       'starter', 'all star', 'all nba', 'mvp', 'P5 DPM', 'median DPM', 'P95 DPM']]
     
     draft_list_full['makes NBA'] = round(draft_list_full['makes NBA'],4)
     draft_list_full['rotation'] = round(draft_list_full['rotation'],4)
@@ -1825,7 +1890,13 @@ def ensemble_draft_model(draft_list2,w,flag):
     draft_list_full['all star'] = round(draft_list_full['all star'],4)
     draft_list_full['all nba'] = round(draft_list_full['all nba'],4)
     draft_list_full['mvp'] = round(draft_list_full['mvp'],4)
+    
     draft_list_full['mean DPM'] = round(draft_list_full['mean DPM'],2)
+    draft_list_full['P5 DPM'] = round(draft_list_full['P5 DPM'],2)
+    draft_list_full['P25 DPM'] = round(draft_list_full['P25 DPM'],2)
+    draft_list_full['median DPM'] = round(draft_list_full['median DPM'],2)
+    draft_list_full['P75 DPM'] = round(draft_list_full['P75 DPM'],2)
+    draft_list_full['P95 DPM'] = round(draft_list_full['P95 DPM'],2)
     
     print()
     print("Ensemble model summary")
@@ -1837,6 +1908,9 @@ def ensemble_draft_model(draft_list2,w,flag):
     print("all nba caliber players",round(draft_list_full['all nba'].sum(),2))
     print("mvp claiber players",round(draft_list_full['mvp'].sum(),2))
     print()
+    
+    draft_list_full = draft_list_full[['pid', 'player', 'team', 'age', 'season', 'mean DPM', 'makes NBA', 'rotation',
+                                       'starter', 'all star', 'all nba', 'mvp', 'median DPM', 'P75 DPM', 'P95 DPM']] #'P5 DPM', 'P25 DPM',
     return draft_list_full
 
 #%% call the player comparision function
@@ -1851,4 +1925,4 @@ def ensemble_draft_model(draft_list2,w,flag):
 
 #full_summary, full_results = hyperparameter_tuning(60)
 
-draft_list = ensemble_draft_model(test,0.6,1) #weight to mdist model, full vs representative
+draft_list = ensemble_draft_model(test,0.6,0) #weight to mdist model, full vs representative
