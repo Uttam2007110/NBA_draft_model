@@ -212,7 +212,7 @@ def bpm_estimate(df,intl):
     #df['bpm_adj'] = 0.41*df['bpm'] + 0.019*df['ORtg'] - 0.019*df['drtg']
     df['bpm_adj'] = 0.472*df['bpm'] + 0.028*df['ORtg'] + 0.073*df['drtg'] - 10.547
     #if(intl == 1): df['bpm_adj'] += 0.25
-    df[['dunkasst','rimasst','midasst','3Passt']] = np.nan
+    df[['dunkasst','rimasst','midasst','3Passt','Rec Rank']] = np.nan
     return df
 
 def height_estimate(df):
@@ -303,10 +303,11 @@ def extract_player_stats():
             data['3P%'] = data['3P%'].fillna(0)
             data['2par'] = data['2par'].fillna(0)
             data['2P%'] = data['2P%'].fillna(0)
+            data['Rec Rank'] = data['Rec Rank'].fillna(0)
             
             data_adj = data[['player','pid','team','season','class','hgt','GP','mp','usg','TS%','ORB%','DRB%','AST%','TO%','ast/tov',
                              'BLK%','blk_share','STL%','stl_share','pfr','ftr','FT%','dunkar','rimar','rim%','midar','mid%',
-                             '3par','3P%','ORtg','drtg','bpm','age','2par','2P%','role','dunkasst','rimasst','midasst','3Passt']]
+                             '3par','3P%','ORtg','drtg','bpm','age','2par','2P%','role','dunkasst','rimasst','midasst','3Passt','Rec Rank']]
         
         data_adj['intl'] = 0
         #team relative bpm
@@ -462,7 +463,7 @@ def pivot_data(df,df2):
 correl_columns = ['age', 'class', 'hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'blk_share','stl_share', 'ftr','FT%', 
                   'dunkar','rimar', 'rim%', 'midar', 'mid%', '3par', '3P%_regressed', 'bpm','ORtg','drtg','mp',
                   'role','rimasst','midasst','bpm_adj',
-                  'feel','stocks','oreb_share','adj_rating_50']
+                  'feel','stocks','oreb_share','adj_rating_50','Rec Rank']
                   
 interaction_columns = ['age_usg', 'age_ORB%', 'age_DRB%', 'age_AST%', 'age_TO%', 'age_ast/tov', 'age_ftr', 'age_FT%', 'age_bpm', 
                        'age_bpm_adj', 'age_mp', 'age_3par', 'age_3P%_regressed', 'age_blk_share', 'age_stl_share', 'age_TS%',
@@ -507,7 +508,7 @@ def get_analytical_weights(X):
     
     #v5, rimasst, midasst and interaction terms
     optimal_weights = [1,1.15,0.9,1,0.95,1,1,1.05,0.95,1.05,1,1,1,1,1,1,1,1,1,0.9,1.25,1.05,0.9,1.1, 1,1,1,1, 
-                       1.15,0.9,0.9,0.75]
+                       1.15,0.9,0.9,0.75,1]
     
     #v6, post grid search after adding interaction terms  
     return np.array(optimal_weights)
@@ -1513,7 +1514,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
         p_nba2 = nba_comps/tot_comps
         p_nba2 = calibrated_probability(nba_comps * padding, tot_comps)
         
-        p_nba =  0.5*p_nba1*padding + 0.5*p_nba2*padding #0*p_nba0*padding
+        p_nba =  0.2*p_nba1*padding + 0.8*p_nba2*padding #0*p_nba0*padding
         #p_nba *= np.exp((p_nba-1)/2.5) # padding * rotation_scale_factor
         if(p_nba>=1): p_nba = 1
         
@@ -1751,17 +1752,17 @@ def mdist_list(year, p_stats, cor_weights, print_val, get_all_player_stats):
     
         arr = np.array(full_dist)  # convert ONCE
         
-        try: p_5  = round(np.percentile(arr, 5), 2)
+        try: p_5  = np.percentile(arr, 5)
         except: p_5 = -5
-        try: p_25  = round(np.percentile(arr, 25), 2)
+        try: p_25  = np.percentile(arr, 25)
         except: p_25 = -5
-        try: p_50 = round(np.percentile(arr, 50), 2)
+        try: p_50 = np.percentile(arr, 50)
         except: p_50 = -5
-        try: p_75 = round(np.percentile(arr, 75), 2)
+        try: p_75 = np.percentile(arr, 75)
         except: p_75 = -5
-        try: p_95 = round(np.percentile(arr, 95), 2)
+        try: p_95 = np.percentile(arr, 95)
         except: p_95 = -5
-        try: meand = round(arr.mean(), 2)
+        try: meand = arr.mean()
         except: meand = -5
         
         old_len = len(arr)
@@ -1776,7 +1777,7 @@ def mdist_list(year, p_stats, cor_weights, print_val, get_all_player_stats):
         pallnba  = np.mean(arr >= 2) * pnba #/ p_weight #2
         pmvp     = np.mean(arr >= 4.5) * pnba #/ p_weight #4.5
     
-        result.append([x,pname,pteam,pclass,page,pseason,pnba,pbench,pstarter,pallstar,pallnba,pmvp,p_5,p_50,p_95,meand])
+        result.append([x,pname,pteam,pclass,page,pseason,pnba,pbench,pstarter,pallstar,pallnba,pmvp,p_5,p_25,p_50,p_75,p_95,meand])
     
         tot_len -= 1
     
@@ -1814,7 +1815,7 @@ def mdist_list(year, p_stats, cor_weights, print_val, get_all_player_stats):
     print("total minutes for run",round((datetime.now()-start_time).total_seconds()/60,2))
     return pivot
 
-def hyperparameter_tuning(n):
+def hyperparameter_tuning(n,test):
     #from sklearn.metrics import average_precision_score, roc_auc_score
     from scipy.stats import spearmanr, kendalltau
 
@@ -1831,7 +1832,8 @@ def hyperparameter_tuning(n):
         else:correl_weights = get_analytical_weights_randomized(data,i)
         
         print(correl_weights)
-        draft_list = mdist_list(latest_season, player_stats.copy(), correl_weights.copy(), 0, 0)
+        #draft_list = mdist_list(latest_season, player_stats.copy(), correl_weights.copy(), 0, 0)
+        draft_list = ensemble_draft_model(test,0.6,0)
 
         draft_list = draft_list.merge(draft_outcomes[['pid','season_x','dpm']], on='pid', how='left')
         draft_list['dpm'] = draft_list['dpm'].fillna(-5) #-4
@@ -1870,19 +1872,28 @@ def ensemble_draft_model(draft_list2,w,flag):
     draft_list = draft_list.reset_index()
     draft_list_full = draft_list.merge(draft_list2, on=['pid','player','team','season'], how='left')
 
-    draft_list_full['mean DPM'] = w*draft_list_full['mean DPM'] + (1-w)*draft_list_full['pred_dpm']
-    draft_list_full['P5 DPM'] = w*draft_list_full['P5 DPM'] + (1-w)*draft_list_full['pred_dpm_p05']
-    draft_list_full['P25 DPM'] = w*draft_list_full['P25 DPM'] + (1-w)*draft_list_full['pred_dpm_p25']
-    draft_list_full['median DPM'] = w*draft_list_full['median DPM'] + (1-w)*draft_list_full['pred_dpm_median']
-    draft_list_full['P75 DPM'] = w*draft_list_full['P75 DPM'] + (1-w)*draft_list_full['pred_dpm_p75']
-    draft_list_full['P95 DPM'] = w*draft_list_full['P95 DPM'] + (1-w)*draft_list_full['pred_dpm_p95']
-    
     draft_list_full['makes NBA'] = w*draft_list_full['makes NBA'] + (1-w)*draft_list_full['pred_makes_NBA']
     draft_list_full['rotation'] = w*draft_list_full['rotation'] + (1-w)*draft_list_full['pred_rotation']
     draft_list_full['starter'] = w*draft_list_full['starter'] + (1-w)*draft_list_full['pred_starter']
     draft_list_full['all star'] = w*draft_list_full['all star'] + (1-w)*draft_list_full['pred_all_star']
     draft_list_full['all nba'] = w*draft_list_full['all nba'] + (1-w)*draft_list_full['pred_all_nba']
     draft_list_full['mvp'] = w*draft_list_full['mvp'] + (1-w)*draft_list_full['pred_mvp']
+
+    #verify this
+    draft_list_full['mean DPM'] = +6 * draft_list_full['mvp'] + \
+                                  +3.5 * (draft_list_full['all nba'] - draft_list_full['mvp']) + \
+                                  +1.5 * (draft_list_full['all star'] - draft_list_full['all nba']) + \
+                                  +0.5 * (draft_list_full['starter'] - draft_list_full['all star']) + \
+                                  -0.5 * (draft_list_full['rotation'] - draft_list_full['starter']) + \
+                                  -2 * (draft_list_full['makes NBA'] - draft_list_full['rotation']) + \
+                                  -5 * (1 - draft_list_full['makes NBA'])
+                                
+    #draft_list_full['mean DPM'] = w*draft_list_full['mean DPM'] + (1-w)*draft_list_full['pred_dpm']
+    draft_list_full['P5 DPM'] = w*draft_list_full['P5 DPM'] + (1-w)*draft_list_full['pred_dpm_p05']
+    draft_list_full['P25 DPM'] = w*draft_list_full['P25 DPM'] + (1-w)*draft_list_full['pred_dpm_p25']
+    draft_list_full['median DPM'] = w*draft_list_full['median DPM'] + (1-w)*draft_list_full['pred_dpm_median']
+    draft_list_full['P75 DPM'] = w*draft_list_full['P75 DPM'] + (1-w)*draft_list_full['pred_dpm_p75']
+    draft_list_full['P95 DPM'] = w*draft_list_full['P95 DPM'] + (1-w)*draft_list_full['pred_dpm_p95']
     
     draft_list_full['makes NBA'] = round(draft_list_full['makes NBA'],4)
     draft_list_full['rotation'] = round(draft_list_full['rotation'],4)
@@ -1911,18 +1922,19 @@ def ensemble_draft_model(draft_list2,w,flag):
     
     draft_list_full = draft_list_full[['pid', 'player', 'team', 'age', 'season', 'mean DPM', 'makes NBA', 'rotation',
                                        'starter', 'all star', 'all nba', 'mvp', 'median DPM', 'P75 DPM', 'P95 DPM']] #'P5 DPM', 'P25 DPM',
+    draft_list_full = draft_list_full.set_index('pid')
     return draft_list_full
 
 #%% call the player comparision function
 
-#pcomps = player_comp_analysis(134193, latest_season, player_stats.copy(), nba_stats.copy(), correl_weights.copy(), 1) #Darryn Peterson
+#pcomps = player_comp_analysis(66098, latest_season, player_stats.copy(), nba_stats.copy(), correl_weights.copy(), 1) #Darryn Peterson
 
 #draft_list = mdist_list(latest_season, player_stats.copy(), correl_weights.copy(), 0, 0)
 
 #clustered_list = clustering(2016,2026,9)
 
-#validation = model_accuracy_measurement(nba_stats,2014,latest_season-1,'results_alt')
+#validation = model_accuracy_measurement(nba_stats,2014,latest_season-1,'results')
 
-#full_summary, full_results = hyperparameter_tuning(60)
+#full_summary, full_results = hyperparameter_tuning(30,test)
 
 draft_list = ensemble_draft_model(test,0.6,0) #weight to mdist model, full vs representative
