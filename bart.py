@@ -463,13 +463,14 @@ def pivot_data(df,df2):
 correl_columns = ['age', 'class', 'hgt', 'usg', 'ORB%', 'DRB%', 'AST%', 'TO%', 'ast/tov', 'blk_share','stl_share', 'ftr','FT%', 
                   'dunkar','rimar', 'rim%', 'midar', 'mid%', '3par', '3P%_regressed', 'bpm','ORtg','drtg','mp',
                   'role','rimasst','midasst','bpm_adj',
-                  'feel','stocks','oreb_share','adj_rating_50','Rec Rank']
+                  'feel','stocks','oreb_share','adj_rating_50']
                   
 interaction_columns = ['age_usg', 'age_ORB%', 'age_DRB%', 'age_AST%', 'age_TO%', 'age_ast/tov', 'age_ftr', 'age_FT%', 'age_bpm', 
                        'age_bpm_adj', 'age_mp', 'age_3par', 'age_3P%_regressed', 'age_blk_share', 'age_stl_share', 'age_TS%',
                        'hgt_usg', 'hgt_ORB%', 'hgt_DRB%', 'hgt_AST%', 'hgt_TO%', 'hgt_ast/tov', 'hgt_ftr', 'hgt_FT%', 'hgt_bpm', 
                        'hgt_bpm_adj', 'hgt_mp', 'hgt_3par', 'hgt_3P%_regressed', 'hgt_blk_share', 'hgt_stl_share', 'hgt_TS%']
 
+data_missing_mask = data[correl_columns].notna().copy()
 data[correl_columns] = data_imputation_08_09(data[correl_columns].copy())
 data_full = data[list(set(correl_columns+interaction_columns+['adj_rating','short']))]
 
@@ -479,7 +480,8 @@ data = data[correl_columns]
 scaler = RobustScaler()
 scaler.fit(data)
 data = scaler.transform(data)
-data = pd.DataFrame(data, columns=correl_columns)
+data = pd.DataFrame(data, columns=correl_columns, index=data_missing_mask.index)
+data_missing_mask = data_missing_mask.loc[data.index, correl_columns].astype(bool)
 
 #correlation_matrix = data.corr()
 #plot_histograms(data)
@@ -508,9 +510,12 @@ def get_analytical_weights(X):
     
     #v5, rimasst, midasst and interaction terms
     optimal_weights = [1,1.15,0.9,1,0.95,1,1,1.05,0.95,1.05,1,1,1,1,1,1,1,1,1,0.9,1.25,1.05,0.9,1.1, 1,1,1,1, 
-                       1.15,0.9,0.9,0.75,1]
+                       1.15,0.9,0.9,0.75]
     
-    #v6, post grid search after adding interaction terms  
+    #v6, post grid search after adding interaction terms
+    optimal_weights = [1.5,  0.75, 1.,   0.75, 1.5,  1.5,  1.1,  1.,   0.9,  0.75, 0.5,  0.75, 1.25, 0.5,
+     1.1,  1.5,  0.75, 0.75, 1.25, 1.1,  1.5,  0.5,  0.9,  0.9,  1.5,  1.1,  1.1,  1.,
+     1.1,  0.9,  0.5,  0.9 ]
     return np.array(optimal_weights)
 
 def get_analytical_weights_randomized(X,i):
@@ -658,6 +663,7 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
     import xgboost as xgb
     from sklearn.model_selection import StratifiedKFold, KFold
     from sklearn.linear_model import LogisticRegression
+    from sklearn.isotonic import IsotonicRegression
     from sklearn.metrics import average_precision_score, roc_auc_score, brier_score_loss
 
     # ---- build target dpm from top-5 offensive/defensive comps ----
@@ -727,6 +733,27 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
         p = np.clip(p, eps, 1 - eps)
         return np.log(p / (1 - p)).reshape(-1, 1)
 
+    def fit_tier_calibrator(oof_raw, y):
+        # Tier-specific calibration: choose the better mapping per tier.
+        sigmoid_model = LogisticRegression(C=1.0, solver="lbfgs", max_iter=1000)
+        sigmoid_model.fit(to_logit(oof_raw), y)
+        sigmoid_pred = sigmoid_model.predict_proba(to_logit(oof_raw))[:, 1]
+        sigmoid_brier = brier_score_loss(y, sigmoid_pred)
+
+        # Isotonic needs enough class signal and enough samples to avoid overfitting.
+        use_isotonic = int(y.sum()) >= 25 and int(len(y) - y.sum()) >= 25 and len(y) >= 300
+        if not use_isotonic:
+            return "sigmoid", sigmoid_model, sigmoid_brier
+
+        isotonic_model = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
+        isotonic_model.fit(oof_raw, y)
+        isotonic_pred = isotonic_model.predict(oof_raw)
+        isotonic_brier = brier_score_loss(y, isotonic_pred)
+
+        if isotonic_brier + 1e-6 < sigmoid_brier:
+            return "isotonic", isotonic_model, isotonic_brier
+        return "sigmoid", sigmoid_model, sigmoid_brier
+
     def fit_tier(name):
         y = df_train[name].to_numpy(dtype=int)
         n_pos = int(y.sum())
@@ -756,13 +783,13 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
             m.fit(X[tr_idx], y[tr_idx])
             oof_raw[va_idx] = m.predict_proba(X[va_idx])[:, 1]
 
-        # Platt (sigmoid) calibrator fit on OOF scores: robust for rare events
-        calibrator = LogisticRegression(C=1.0, solver="lbfgs", max_iter=1000)
-        calibrator.fit(to_logit(oof_raw), y)
+        calib_name, calibrator, calib_brier = fit_tier_calibrator(oof_raw, y)
 
         def calibrate(p):
             if len(p) == 0:
                 return p
+            if calib_name == "isotonic":
+                return calibrator.predict(p)
             return calibrator.predict_proba(to_logit(p))[:, 1]
 
         train_pred = calibrate(oof_raw)
@@ -776,7 +803,8 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
         auc = roc_auc_score(y, oof_raw)
         brier = brier_score_loss(y, train_pred)
         print(f"[{name}] pos = {n_pos} / {len(y)} (base {y.mean():.4f}), spw = {spw:.2f} | "
-              f"AUC-PR = {ap:.4f} | AUC-ROC = {auc:.4f} | Brier = {brier:.5f} | "
+              f"AUC-PR = {ap:.4f} | AUC-ROC = {auc:.4f} | "
+              f"Cal = {calib_name} (OOF Brier {calib_brier:.5f}) | Brier = {brier:.5f} | "
               f"mean pred = {train_pred.mean():.4f}")
 
         df_train[pred_col] = train_pred * (1-df_train['short']/1.5)
@@ -911,24 +939,9 @@ player_stats = player_stats[['player','age','pid', 'team','season','class', 'hgt
 del test_reduced,made_nba
 
 #%% mahalanobis distance algo
-def distance2(pid, yr, full_matrix, data_copy, weights_copy, print_df):
-    data_copy = data_copy[data_copy.index.isin(full_matrix.index)]
-    
-    cov = np.ma.cov(np.ma.masked_invalid(data_copy), rowvar=False)    
-    try:
-        invcov = np.linalg.inv(cov)
-    except np.linalg.LinAlgError:
-        # If covariance is singular, use pseudo-inverse
-        invcov = np.linalg.pinv(cov)
-    
-    # Map skewed & zero-inflated data into a normal space while preserving rank & outliers
-    #transformer = QuantileTransformer(output_distribution='normal', random_state=42)
-    #transformed_data = transformer.fit_transform(data_copy)
-    
-    # Fit Ledoit-Wolf Shrinkage on the transformed rank space
-    #lw = LedoitWolf().fit(transformed_data)
-    #cov = lw.covariance_
-    #invcov = lw.precision_
+def distance2(pid, yr, full_matrix, data_copy, weights_copy, missing_mask_copy, print_df):
+    data_copy = data_copy.reindex(full_matrix.index)
+    missing_mask_copy = missing_mask_copy.reindex(full_matrix.index).fillna(False)
 
     # Get player data
     player_data = full_matrix.loc[(full_matrix['pid'] == pid) & (full_matrix['season'] == yr)]
@@ -937,27 +950,48 @@ def distance2(pid, yr, full_matrix, data_copy, weights_copy, print_df):
     else: player_data = full_matrix.loc[(full_matrix['player'] == name) & (full_matrix['season'] == yr)]
     """
     player_index = player_data.index[0]
-    player = data_copy.iloc[player_index] # data_copy
-    pvec = np.ma.masked_invalid(np.array(player))
+    player = data_copy.loc[player_index]
+    pvec = player.to_numpy(dtype=float)
 
-    data_array = np.ma.masked_invalid(data_copy.to_numpy()) # data_copy
-    delta_matrix = data_array - pvec #data_array
+    data_array = data_copy.to_numpy(dtype=float)
+    delta_matrix = data_array - pvec
 
-    # adding custom weights to the covariance matrix
-    weighted_invcov = weights_copy[:, None] * invcov * weights_copy[None, :]
+    feature_weights = np.asarray(weights_copy, dtype=float)
+    if len(feature_weights) != data_copy.shape[1]:
+        raise ValueError("Feature weights length must match the number of distance features")
+    feature_weights = np.clip(feature_weights, 1e-6, None)
 
-    #temp = np.einsum('ij,jk,ik->i', delta_matrix, invcov, delta_matrix)
-    temp = np.einsum('ij,jk,ik->i', delta_matrix, weighted_invcov, delta_matrix)
+    player_mask = missing_mask_copy.loc[player_index].to_numpy(dtype=bool)
+    mask_array = missing_mask_copy.to_numpy(dtype=bool)
+    shared_mask = mask_array & player_mask
+    overlap_count = shared_mask.sum(axis=1)
+    total_features = data_copy.shape[1]
+
+    weighted_sq = np.square(delta_matrix) * feature_weights[None, :]
+    shared_weighted_sq = np.where(shared_mask, weighted_sq, 0.0)
+    temp = shared_weighted_sq.sum(axis=1)
+
+    valid_overlap = overlap_count > 0
+    overlap_scale = np.full(len(overlap_count), np.inf, dtype=float)
+    overlap_scale[valid_overlap] = total_features / overlap_count[valid_overlap]
+    temp = temp * overlap_scale
     temp = np.clip(temp, 0.0, None)
     dist_array = np.sqrt(temp)
 
-    dist_array[player_index] = 0
+    overlap_ratio = np.zeros(len(overlap_count), dtype=float)
+    overlap_ratio[valid_overlap] = overlap_count[valid_overlap] / total_features
+    score_array = np.exp(-0.5 * temp) * np.power(overlap_ratio, 1.5)
+
+    player_pos = data_copy.index.get_loc(player_index)
+    dist_array[player_pos] = 0
+    score_array[player_pos] = 1.0
 
     full_matrix['mdist'] = dist_array
+    full_matrix['overlap_ratio'] = overlap_ratio
     full_matrix = full_matrix[['player', 'team', 'season', 'hgt', 'bpm', 'mdist', 'pid']]
-    full_matrix['score'] = 1 / (full_matrix['mdist'] ** 2) # np.exp(-full_matrix['mdist']*full_matrix['mdist']/2)
+    full_matrix['score'] = score_array
     full_matrix = full_matrix.sort_values(by='score', ascending=False)
-
+ 
     #if(len(full_matrix[full_matrix['mdist']<=3])>100): full_matrix = full_matrix.head(100)
     #elif(len(full_matrix[full_matrix['mdist']<=3])<50): full_matrix = full_matrix.head(50)
     #else: full_matrix = full_matrix[full_matrix['mdist']<=3]
@@ -1444,8 +1478,8 @@ def calibrated_probability(n_s,n_t,p0=0.04,m=1,gamma=1.1,inflection=0.25,steepne
     return p_final
 
 def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
-    #dist = distance2(x, year, p_stats.copy(), data.copy(), print_val)
-    dist = distance2(x, year, p_stats, data, cor_weights, print_val)
+    #dist = distance2(x, year, p_stats.copy(), data.copy(), data_missing_mask.copy(), print_val)
+    dist = distance2(x, year, p_stats, data, cor_weights, data_missing_mask, print_val)
     dist = dist.drop_duplicates(subset=['player'], keep='first')
     dist['weights'] = np.exp(-dist['mdist'])
     
@@ -1832,8 +1866,8 @@ def hyperparameter_tuning(n,test):
         else:correl_weights = get_analytical_weights_randomized(data,i)
         
         print(correl_weights)
-        #draft_list = mdist_list(latest_season, player_stats.copy(), correl_weights.copy(), 0, 0)
-        draft_list = ensemble_draft_model(test,0.6,0)
+        draft_list = mdist_list(latest_season, player_stats.copy(), correl_weights.copy(), 0, 0)
+        #draft_list = ensemble_draft_model(test,0.6,0)
 
         draft_list = draft_list.merge(draft_outcomes[['pid','season_x','dpm']], on='pid', how='left')
         draft_list['dpm'] = draft_list['dpm'].fillna(-5) #-4
