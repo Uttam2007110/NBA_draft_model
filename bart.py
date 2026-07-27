@@ -470,7 +470,6 @@ interaction_columns = ['age_usg', 'age_ORB%', 'age_DRB%', 'age_AST%', 'age_TO%',
                        'hgt_usg', 'hgt_ORB%', 'hgt_DRB%', 'hgt_AST%', 'hgt_TO%', 'hgt_ast/tov', 'hgt_ftr', 'hgt_FT%', 'hgt_bpm', 
                        'hgt_bpm_adj', 'hgt_mp', 'hgt_3par', 'hgt_3P%_regressed', 'hgt_blk_share', 'hgt_stl_share', 'hgt_TS%']
 
-data_missing_mask = data[correl_columns].notna().copy()
 data[correl_columns] = data_imputation_08_09(data[correl_columns].copy())
 data_full = data[list(set(correl_columns+interaction_columns+['adj_rating','short']))]
 
@@ -480,8 +479,7 @@ data = data[correl_columns]
 scaler = RobustScaler()
 scaler.fit(data)
 data = scaler.transform(data)
-data = pd.DataFrame(data, columns=correl_columns, index=data_missing_mask.index)
-data_missing_mask = data_missing_mask.loc[data.index, correl_columns].astype(bool)
+data = pd.DataFrame(data, columns=correl_columns)
 
 #correlation_matrix = data.corr()
 #plot_histograms(data)
@@ -512,10 +510,7 @@ def get_analytical_weights(X):
     optimal_weights = [1,1.15,0.9,1,0.95,1,1,1.05,0.95,1.05,1,1,1,1,1,1,1,1,1,0.9,1.25,1.05,0.9,1.1, 1,1,1,1, 
                        1.15,0.9,0.9,0.75]
     
-    #v6, post grid search after adding interaction terms
-    optimal_weights = [1.5,  0.75, 1.,   0.75, 1.5,  1.5,  1.1,  1.,   0.9,  0.75, 0.5,  0.75, 1.25, 0.5,
-     1.1,  1.5,  0.75, 0.75, 1.25, 1.1,  1.5,  0.5,  0.9,  0.9,  1.5,  1.1,  1.1,  1.,
-     1.1,  0.9,  0.5,  0.9 ]
+    #v6, post grid search after adding interaction terms  
     return np.array(optimal_weights)
 
 def get_analytical_weights_randomized(X,i):
@@ -545,8 +540,9 @@ def extract_nba_stats(year):
     nba_stats_y = pd.merge(nba_stats_y, mins[['RowId','season','Minutes']], left_on=['nba_id','season_x'], right_on=['RowId','season'], how='left')
     
     #impute values for missing seasons and put lower threshold to 1
-    nba_stats_y['Minutes'] = nba_stats_y['Minutes'].fillna(92*nba_stats_y['age']-1.4*nba_stats_y['age']*nba_stats_y['age']+327*nba_stats_y['o_dpm']+89*nba_stats_y['d_dpm'])
-    nba_stats_y['Minutes'] = nba_stats_y['Minutes'].clip(lower=1)
+    #nba_stats_y['Minutes'] = nba_stats_y['Minutes'].fillna(92*nba_stats_y['age']-1.4*nba_stats_y['age']*nba_stats_y['age']+327*nba_stats_y['o_dpm']+89*nba_stats_y['d_dpm'])
+    #nba_stats_y['Minutes'] = nba_stats_y['Minutes'].clip(lower=1)
+    nba_stats_y['Minutes'] = nba_stats_y['Minutes'].fillna(0)
     
     #Padding for the DARKO values
     mins = pd.pivot_table(mins,index='season',values='Minutes',aggfunc='mean')
@@ -558,15 +554,451 @@ def extract_nba_stats(year):
     
     nba_stats_y['o_dpm'] = (nba_stats_y['o_dpm'] * nba_stats_y['Minutes'] + -3 * nba_stats_y['th'])/(nba_stats_y['Minutes'] + nba_stats_y['th']) #-2.5
     nba_stats_y['d_dpm'] = (nba_stats_y['d_dpm'] * nba_stats_y['Minutes'] + -2 * nba_stats_y['th'])/(nba_stats_y['Minutes'] + nba_stats_y['th']) #-1.5
-    
     nba_stats_y['age_adj'] = nba_stats_y['age'].round()
-    #nba_stats_y = nba_stats_y[['player_name','season_x','age_adj','dpm','pid']]
-    nba_stats_y = nba_stats_y[['player_name','season_x','age_adj','o_dpm','d_dpm','pid']]
-    nba_stats_y = nba_stats_y[nba_stats_y['pid'].notna()]
-    nba_stats_y = nba_stats_y[nba_stats_y['season_x']<=year]
     
-    nba_stats_y = age_curve_adj(nba_stats_y.copy(),year)
+    sample_df = nba_stats_y[['player_name','season_x','Minutes','age_adj','o_dpm','d_dpm','pid']]
+    sample_df = sample_df[sample_df['season_x']<=year]
+    nba_stats_y = dpm_forecaster_new(sample_df)
+    nba_stats_y['pid'] = pd.to_numeric(nba_stats_y['pid'], errors='coerce')
+    nba_stats_y = nba_stats_y.rename(columns={'age': 'age_adj'})
+    
+    nba_stats_y = nba_stats_y[['player_name','season_x','age_adj','o_dpm','d_dpm','pid','is_observed']]
+    nba_stats_y = nba_stats_y[nba_stats_y['pid'].notna()]
+    
+    #nba_stats_y = nba_stats_y[nba_stats_y['season_x']<=year]
+    #nba_stats_y = age_curve_adj(nba_stats_y.copy(),year)
     return nba_stats_y
+
+def dpm_forecaster_new(df):
+    # ── constants ─────────────────────────────────────────────────────────────
+    AGE_MIN, AGE_MAX = 19, 40
+    AGES        = list(range(AGE_MIN, AGE_MAX + 1))
+    TIER_NAMES  = ["allnba", "allstar", 'good', "rotation", "fringe", "marginal"]
+    N_TIERS     = len(TIER_NAMES)
+
+    # Four percentile cut-points on total_dpm → five tiers (top → bottom).
+    # Evaluated per age so the same raw DPM can rank differently at 22 vs 35.
+    PCTILE_CUTS     = [95, 90, 75, 50, 25, 5]
+    AGE_WINDOW      = 1      # ± seasons included when computing per-age stats
+    MIN_CELL_OBS    = 8      # fall back to global percentile if fewer obs at age
+    RECENCY_DECAY   = 1.5    # exponential decay rate across observed seasons
+
+    # ── Step 1: per-age tier boundaries ───────────────────────────────────────
+    obs = df.dropna(subset=["o_dpm", "d_dpm"]).copy()
+    obs["total_dpm"] = obs["o_dpm"] + obs["d_dpm"]
+    obs["age_int"]   = obs["age_adj"].round().astype(int).clip(AGE_MIN, AGE_MAX)
+
+    global_cuts = np.percentile(obs["total_dpm"], PCTILE_CUTS)
+
+    # age_cuts[age] = [p90, p75, p50, p25] thresholds on total_dpm
+    age_cuts = {}
+    for age in AGES:
+        window = obs[obs["age_int"].between(age - AGE_WINDOW,
+                                            age + AGE_WINDOW)]["total_dpm"]
+        age_cuts[age] = (np.percentile(window, PCTILE_CUTS)
+                         if len(window) >= MIN_CELL_OBS else global_cuts.copy())
+
+    def _tier_idx(total_dpm, age_int):
+        cuts = age_cuts[int(np.clip(age_int, AGE_MIN, AGE_MAX))]
+        if   total_dpm >= cuts[0]: return 0   # elite
+        elif total_dpm >= cuts[1]: return 1   # good
+        elif total_dpm >= cuts[2]: return 2   # rotation
+        elif total_dpm >= cuts[3]: return 3   # fringe
+        elif total_dpm >= cuts[4]: return 4   # fringe
+        else:                      return 5   # marginal
+
+    obs["tier_idx"] = [_tier_idx(r.total_dpm, r.age_int)
+                       for r in obs.itertuples(index=False)]
+
+    # ── Step 2: piecewise quadratic aging curves per tier ─────────────────────
+    # Each tier curve is now TWO quadratics with a shared peak:
+    #   young side (age <= peak):  y = peak_val + a_left  * (age - peak_age)^2
+    #   old side   (age >  peak):  y = peak_val + a_right * (age - peak_age)^2
+    # where a_left and a_right are trained separately from data.
+    #
+    # We enforce concave-down shapes and require older-age decay to be steeper
+    # than younger-age rise (|a_right| >= ratio * |a_left|).
+    #
+    # Per-tier multipliers: (dpm_rise, dpm_decay, min_rise, min_decay)
+    _AMP = {
+        "allnba":   (1.05, 1.30, 1.00, 1.20),
+        "allstar":  (1.10, 1.35, 1.05, 1.25),
+        "good":     (1.15, 1.45, 1.10, 1.35),
+        "rotation": (1.20, 1.55, 1.15, 1.45),
+        "fringe":   (1.25, 1.70, 1.20, 1.60),
+        "marginal": (1.30, 1.85, 1.25, 1.75),
+    }
+    _MIN_A_DPM = 0.0015
+    _MIN_A_MIN = 0.30
+    _OLDER_STEEPER_RATIO_DPM = 1.25
+    _OLDER_STEEPER_RATIO_MIN = 1.20
+
+    def _fit_quad_raw(ages_arr, vals_arr, fallback=0.0):
+        """OLS quadratic fit; returns (a2, a1, a0) coefficients."""
+        mask = np.isfinite(vals_arr) & np.isfinite(ages_arr)
+        a, v = ages_arr[mask], vals_arr[mask]
+        if len(np.unique(a)) >= 3:
+            return np.polyfit(a, v, deg=2)
+        elif len(np.unique(a)) >= 2:
+            c = np.polyfit(a, v, deg=1)
+            return np.array([0.0, c[0], c[1]])
+        elif len(np.unique(a)) == 1:
+            return np.array([0.0, 0.0, float(v.mean()) if len(v) else fallback])
+        else:
+            return np.array([0.0, 0.0, fallback])
+
+    def _fit_side_curvature(side_ages, side_vals, peak_age, peak_val, min_abs_a):
+        """Fit y - peak_val = a * (age - peak_age)^2 on one side of the peak."""
+        mask = np.isfinite(side_ages) & np.isfinite(side_vals)
+        x = side_ages[mask] - peak_age
+        y = side_vals[mask] - peak_val
+        if len(x) == 0:
+            return -min_abs_a
+        x2 = x ** 2
+        denom = float(np.dot(x2, x2))
+        if denom <= 1e-12:
+            return -min_abs_a
+        a = float(np.dot(x2, y) / denom)
+        return a
+
+    def _fit_piecewise_curve(
+        ages_arr,
+        vals_arr,
+        rise_amp,
+        decay_amp,
+        min_abs_a,
+        older_ratio,
+        fallback=0.0,
+    ):
+        """
+        Train two quadratics (young/old) with shared peak and steeper old decay.
+        """
+        raw = _fit_quad_raw(ages_arr, vals_arr, fallback=fallback)
+
+        if abs(raw[0]) > 1e-10:
+            peak_age = float(np.clip(-raw[1] / (2 * raw[0]), AGE_MIN, AGE_MAX))
+            peak_val = float(np.poly1d(raw)(peak_age))
+        else:
+            valid_ages = ages_arr[np.isfinite(ages_arr)]
+            peak_age = float(np.clip(np.median(valid_ages) if len(valid_ages) else 27.0,
+                                     AGE_MIN, AGE_MAX))
+            valid_vals = vals_arr[np.isfinite(vals_arr)]
+            peak_val = float(valid_vals.mean()) if len(valid_vals) else float(fallback)
+
+        left_mask  = ages_arr <= peak_age
+        right_mask = ages_arr >= peak_age
+
+        a_left = _fit_side_curvature(
+            ages_arr[left_mask], vals_arr[left_mask], peak_age, peak_val, min_abs_a
+        )
+        a_right = _fit_side_curvature(
+            ages_arr[right_mask], vals_arr[right_mask], peak_age, peak_val, min_abs_a
+        )
+
+        # Apply side-specific amplification
+        a_left *= rise_amp
+        a_right *= decay_amp
+
+        # Enforce concave-down shape and steeper decay on the older side.
+        a_left = -max(abs(a_left), min_abs_a)
+        a_right = -max(abs(a_right), min_abs_a)
+        a_right = -max(abs(a_right), abs(a_left) * older_ratio)
+
+        return {
+            "peak_age": peak_age,
+            "peak_val": peak_val,
+            "a_left": a_left,
+            "a_right": a_right,
+        }
+
+    def _eval_piecewise(piece, age):
+        dx = float(age) - piece["peak_age"]
+        if age <= piece["peak_age"]:
+            return piece["peak_val"] + piece["a_left"] * dx * dx
+        return piece["peak_val"] + piece["a_right"] * dx * dx
+
+    tier_curves      = []   # {age: {o_dpm, d_dpm, minutes, o_std, d_std, m_std}}
+    tier_quad_params = []   # (piece_o, piece_d, piece_m) for diagnostics
+
+    for t in range(N_TIERS):
+        name_t = TIER_NAMES[t]
+        dpm_rise, dpm_decay, min_rise, min_decay = _AMP[name_t]
+        td = obs[obs["tier_idx"] == t]
+
+        t_ages = td["age_int"].to_numpy(dtype=float)
+        piece_o = _fit_piecewise_curve(
+            t_ages,
+            td["o_dpm"].to_numpy(dtype=float),
+            rise_amp=dpm_rise,
+            decay_amp=dpm_decay,
+            min_abs_a=_MIN_A_DPM,
+            older_ratio=_OLDER_STEEPER_RATIO_DPM,
+            fallback=0.0,
+        )
+        piece_d = _fit_piecewise_curve(
+            t_ages,
+            td["d_dpm"].to_numpy(dtype=float),
+            rise_amp=dpm_rise,
+            decay_amp=dpm_decay,
+            min_abs_a=_MIN_A_DPM,
+            older_ratio=_OLDER_STEEPER_RATIO_DPM,
+            fallback=0.0,
+        )
+
+        mins_obs = td["Minutes"].dropna()
+        if len(mins_obs) > 0:
+            m_ages = td.loc[mins_obs.index, "age_int"].to_numpy(dtype=float)
+            m_vals = mins_obs.to_numpy(dtype=float)
+        else:
+            m_ages = np.array([], dtype=float)
+            m_vals = np.array([], dtype=float)
+
+        piece_m = _fit_piecewise_curve(
+            m_ages,
+            m_vals,
+            rise_amp=min_rise,
+            decay_amp=min_decay,
+            min_abs_a=_MIN_A_MIN,
+            older_ratio=_OLDER_STEEPER_RATIO_MIN,
+            fallback=1200.0,
+        )
+
+        tier_quad_params.append((piece_o, piece_d, piece_m))
+
+        # per-age residual std for Gaussian likelihood
+        o_std_map, d_std_map, m_std_map = {}, {}, {}
+        for age in AGES:
+            cell = td[td["age_int"].between(age - AGE_WINDOW, age + AGE_WINDOW)]
+            if len(cell) >= 3:
+                o_std_map[age] = max(float(cell["o_dpm"].std(ddof=1)), 0.20)
+                d_std_map[age] = max(float(cell["d_dpm"].std(ddof=1)), 0.15)
+                m_std_map[age] = max(float(cell["Minutes"].std(ddof=1)), 120.0)
+            else:
+                o_std_map[age] = max(float(td["o_dpm"].std(ddof=1))
+                                     if len(td) >= 2 else 0.50, 0.20)
+                d_std_map[age] = max(float(td["d_dpm"].std(ddof=1))
+                                     if len(td) >= 2 else 0.40, 0.15)
+                m_std_map[age] = max(float(td["Minutes"].std(ddof=1))
+                                     if len(td["Minutes"].dropna()) >= 2 else 300.0,
+                                     120.0)
+
+        tier_curves.append({
+            age: {
+                "o_dpm":   float(np.clip(_eval_piecewise(piece_o, age), -8.0, 8.0)),
+                "d_dpm":   float(np.clip(_eval_piecewise(piece_d, age), -6.0, 6.0)),
+                "minutes": float(np.clip(_eval_piecewise(piece_m, age),  0.0, 3500.0)),
+                "o_std":   o_std_map[age],
+                "d_std":   d_std_map[age],
+                "m_std":   m_std_map[age],
+            }
+            for age in AGES
+        })
+
+    # ── print piecewise curvature diagnostics ──────────────────────────────────
+    print("[aging curves] Piecewise quadratic curvatures by tier:")
+    print(f"  {'tier':>9} | {'o_dpm':^39} | {'d_dpm':^39} | {'minutes':^39}")
+    for t, tname in enumerate(TIER_NAMES):
+        co, cd, cm = tier_quad_params[t]
+        fmt = lambda p: (
+            f"peak={p['peak_age']:.2f}, young_a={p['a_left']:+.4f}, old_a={p['a_right']:+.4f}"
+        )
+        print(f"  {tname:>9} | {fmt(co)} | {fmt(cd)} | {fmt(cm)}")
+
+    # ── print tier threshold summary ──────────────────────────────────────────
+    sample_ages = [20, 23, 26, 29, 32, 35, 38]
+    print("\n[thresholds] Age-specific total-DPM tier boundaries (sample ages):")
+    header = f"  {'tier':>9} | " + " | ".join(f"age {a}" for a in sample_ages)
+    print(header)
+    for i, name in enumerate(TIER_NAMES[:-1]):   # 4 cut-points
+        row = f"  {name:>9} | " + " | ".join(
+            f"{age_cuts[a][i]:+.2f}" for a in sample_ages
+        )
+        print(row)
+
+    # ── helpers for per-player computation ───────────────────────────────────
+    def _norm_logpdf(x, mu, sigma):
+        """Gaussian log-density (no scipy needed)."""
+        sigma = max(float(sigma), 1e-6)
+        return -0.5 * ((x - mu) / sigma) ** 2 - np.log(sigma)
+
+    def _tier_probs(obs_rows):
+        """
+        Soft tier probabilities from recency-weighted Gaussian likelihood.
+        Uses o_dpm, d_dpm, Minutes and age.
+        obs_rows: DataFrame sorted ascending by age_adj, with o_dpm & d_dpm.
+        """
+        if len(obs_rows) == 0:
+            return np.ones(N_TIERS) / N_TIERS
+
+        n = len(obs_rows)
+        rw = np.exp(np.linspace(-RECENCY_DECAY, 0.0, n))
+        rw /= rw.sum()
+
+        log_p = np.zeros(N_TIERS)
+        for i, (_, row) in enumerate(obs_rows.iterrows()):
+            ai = int(np.clip(round(float(row["age_adj"])), AGE_MIN, AGE_MAX))
+            o, d = float(row["o_dpm"]), float(row["d_dpm"])
+            m = float(row["Minutes"]) if pd.notna(row["Minutes"]) else None
+            for t in range(N_TIERS):
+                c = tier_curves[t][ai]
+                ll = (
+                    _norm_logpdf(o, c["o_dpm"], c["o_std"])
+                    + _norm_logpdf(d, c["d_dpm"], c["d_std"])
+                )
+                if m is not None:
+                    ll += _norm_logpdf(m, c["minutes"], c["m_std"])
+                log_p[t] += rw[i] * ll
+
+        log_p -= log_p.max()
+        probs = np.exp(log_p)
+        return probs / probs.sum()
+
+    def _residuals(obs_rows, rw):
+        """
+        Per-tier recency-weighted residual: player's observed value − tier curve.
+        Returns arrays of shape (N_TIERS,) for o, d, minutes.
+        """
+        res_o = np.zeros(N_TIERS)
+        res_d = np.zeros(N_TIERS)
+        res_m = np.zeros(N_TIERS)
+        for i, (_, row) in enumerate(obs_rows.iterrows()):
+            ai = int(np.clip(round(float(row["age_adj"])), AGE_MIN, AGE_MAX))
+            o, d = float(row["o_dpm"]), float(row["d_dpm"])
+            m    = float(row["Minutes"]) if pd.notna(row["Minutes"]) else None
+            for t in range(N_TIERS):
+                c = tier_curves[t][ai]
+                res_o[t] += rw[i] * (o - c["o_dpm"])
+                res_d[t] += rw[i] * (d - c["d_dpm"])
+                if m is not None:
+                    res_m[t] += rw[i] * (m - c["minutes"])
+        return res_o, res_d, res_m
+
+    # ── per-player projection ─────────────────────────────────────────────────
+    def _project_player(player_data):
+        # build age → {o, d, m} lookup; for duplicate ages keep most-minutes row
+        known = {}
+        for _, row in player_data.sort_values("Minutes",
+                                              ascending=False,
+                                              na_position="last").iterrows():
+            ai = int(np.clip(round(float(row["age_adj"])), AGE_MIN, AGE_MAX))
+            if ai not in known:
+                known[ai] = {
+                    "o": row["o_dpm"]   if pd.notna(row["o_dpm"])   else None,
+                    "d": row["d_dpm"]   if pd.notna(row["d_dpm"])   else None,
+                    "m": float(row["Minutes"]) if pd.notna(row["Minutes"]) else None,
+                    "season_x": int(round(float(row["season_x"])))
+                    if pd.notna(row["season_x"]) else None,
+                }
+
+        # player-specific season-age mapping: season_x ≈ age + offset
+        season_rows = player_data.dropna(subset=["season_x", "age_adj"])
+        if len(season_rows) > 0:
+            season_offset = float(
+                np.median(
+                    season_rows["season_x"].to_numpy(dtype=float)
+                    - season_rows["age_adj"].to_numpy(dtype=float)
+                )
+            )
+        else:
+            season_offset = None
+
+        obs_rows = (player_data.dropna(subset=["o_dpm", "d_dpm"])
+                               .sort_values("age_adj")
+                               .reset_index(drop=True))
+
+        tp = _tier_probs(obs_rows)
+        dominant = TIER_NAMES[int(np.argmax(tp))]
+
+        n = len(obs_rows)
+        if n > 0:
+            rw = np.exp(np.linspace(-RECENCY_DECAY, 0.0, n)); rw /= rw.sum()
+            res_o, res_d, res_m = _residuals(obs_rows, rw)
+        else:
+            res_o = res_d = res_m = np.zeros(N_TIERS)
+
+        results = []
+        for age in AGES:
+            entry       = known.get(age)
+            is_observed = entry is not None
+            if is_observed and entry["season_x"] is not None:
+                season_x = int(entry["season_x"])
+            elif season_offset is not None:
+                season_x = int(round(age + season_offset))
+            else:
+                season_x = None
+
+            # ── DPM ──────────────────────────────────────────────────────────
+            if is_observed and entry["o"] is not None:
+                pred_o, pred_d = entry["o"], entry["d"]
+                per_tier_od = {
+                    TIER_NAMES[t]: (pred_o, pred_d)
+                    for t in range(N_TIERS)
+                }
+            else:
+                # Pairwise per-tier forecasts (o_dpm, d_dpm), then blended output.
+                per_tier_od = {
+                    TIER_NAMES[t]: (
+                        float(tier_curves[t][age]["o_dpm"] + res_o[t]),
+                        float(tier_curves[t][age]["d_dpm"] + res_d[t]),
+                    )
+                    for t in range(N_TIERS)
+                }
+                pred_o = float(sum(tp[t] * per_tier_od[TIER_NAMES[t]][0]
+                                   for t in range(N_TIERS)))
+                pred_d = float(sum(tp[t] * per_tier_od[TIER_NAMES[t]][1]
+                                   for t in range(N_TIERS)))
+
+            # ── Minutes ───────────────────────────────────────────────────────
+            if is_observed and entry["m"] is not None:
+                pred_m = entry["m"]
+            else:
+                pred_m = float(sum(
+                    tp[t] * max(0.0, tier_curves[t][age]["minutes"] + res_m[t])
+                    for t in range(N_TIERS)
+                ))
+
+            results.append({
+                "season_x":    season_x,
+                "age":         age,
+                "o_dpm":       round(pred_o, 4),
+                "d_dpm":       round(pred_d, 4),
+                "dpm":         round(pred_o + pred_d, 4),
+                "minutes":     round(max(0.0, pred_m), 1),
+                "is_observed": is_observed,
+                "tier":        dominant,
+                **{f"p_{TIER_NAMES[t]}": round(float(tp[t]), 4)
+                   for t in range(N_TIERS)},
+                **{f"o_dpm_{tn}": round(float(per_tier_od[tn][0]), 4)
+                   for tn in TIER_NAMES},
+                **{f"d_dpm_{tn}": round(float(per_tier_od[tn][1]), 4)
+                   for tn in TIER_NAMES},
+            })
+
+        return pd.DataFrame(results)
+
+    # ── project all players ───────────────────────────────────────────────────
+    df = df.copy()
+    df["_gkey"] = df["player_name"].astype(str) + "||" + df["pid"].astype(str)
+    groups = list(df.groupby("_gkey", sort=False))
+    print(f"\nProjecting {len(groups):,} players with probabilistic tier curves ...")
+
+    pieces = []
+    for gkey, grp in groups:
+        name, pid_str = gkey.split("||", 1)
+        proj = _project_player(grp)
+        proj["player_name"] = name
+        proj["pid"]         = pid_str
+        pieces.append(proj)
+
+    out = pd.concat(pieces, ignore_index=True)
+    prob_cols = [f"p_{t}" for t in TIER_NAMES]
+    pair_cols = [f"o_dpm_{t}" for t in TIER_NAMES] + [f"d_dpm_{t}" for t in TIER_NAMES]
+    out = out[["player_name", "pid", "season_x", "age", "o_dpm", "d_dpm", "dpm",
+               "minutes", "is_observed", "tier"] + prob_cols + pair_cols]
+    print(f"Done. {out.shape[0]:,} rows ({len(groups)} players × "
+          f"{AGE_MAX - AGE_MIN + 1} ages)")
+    return out
+    return out
 
 def adjust_dpm(group,adj_season):
     curr_age = group.loc[group['season_x']==group['season_x'].max(),'age'].mean()
@@ -663,7 +1095,6 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
     import xgboost as xgb
     from sklearn.model_selection import StratifiedKFold, KFold
     from sklearn.linear_model import LogisticRegression
-    from sklearn.isotonic import IsotonicRegression
     from sklearn.metrics import average_precision_score, roc_auc_score, brier_score_loss
 
     # ---- build target dpm from top-5 offensive/defensive comps ----
@@ -733,27 +1164,6 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
         p = np.clip(p, eps, 1 - eps)
         return np.log(p / (1 - p)).reshape(-1, 1)
 
-    def fit_tier_calibrator(oof_raw, y):
-        # Tier-specific calibration: choose the better mapping per tier.
-        sigmoid_model = LogisticRegression(C=1.0, solver="lbfgs", max_iter=1000)
-        sigmoid_model.fit(to_logit(oof_raw), y)
-        sigmoid_pred = sigmoid_model.predict_proba(to_logit(oof_raw))[:, 1]
-        sigmoid_brier = brier_score_loss(y, sigmoid_pred)
-
-        # Isotonic needs enough class signal and enough samples to avoid overfitting.
-        use_isotonic = int(y.sum()) >= 25 and int(len(y) - y.sum()) >= 25 and len(y) >= 300
-        if not use_isotonic:
-            return "sigmoid", sigmoid_model, sigmoid_brier
-
-        isotonic_model = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
-        isotonic_model.fit(oof_raw, y)
-        isotonic_pred = isotonic_model.predict(oof_raw)
-        isotonic_brier = brier_score_loss(y, isotonic_pred)
-
-        if isotonic_brier + 1e-6 < sigmoid_brier:
-            return "isotonic", isotonic_model, isotonic_brier
-        return "sigmoid", sigmoid_model, sigmoid_brier
-
     def fit_tier(name):
         y = df_train[name].to_numpy(dtype=int)
         n_pos = int(y.sum())
@@ -783,13 +1193,13 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
             m.fit(X[tr_idx], y[tr_idx])
             oof_raw[va_idx] = m.predict_proba(X[va_idx])[:, 1]
 
-        calib_name, calibrator, calib_brier = fit_tier_calibrator(oof_raw, y)
+        # Platt (sigmoid) calibrator fit on OOF scores: robust for rare events
+        calibrator = LogisticRegression(C=1.0, solver="lbfgs", max_iter=1000)
+        calibrator.fit(to_logit(oof_raw), y)
 
         def calibrate(p):
             if len(p) == 0:
                 return p
-            if calib_name == "isotonic":
-                return calibrator.predict(p)
             return calibrator.predict_proba(to_logit(p))[:, 1]
 
         train_pred = calibrate(oof_raw)
@@ -803,8 +1213,7 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
         auc = roc_auc_score(y, oof_raw)
         brier = brier_score_loss(y, train_pred)
         print(f"[{name}] pos = {n_pos} / {len(y)} (base {y.mean():.4f}), spw = {spw:.2f} | "
-              f"AUC-PR = {ap:.4f} | AUC-ROC = {auc:.4f} | "
-              f"Cal = {calib_name} (OOF Brier {calib_brier:.5f}) | Brier = {brier:.5f} | "
+              f"AUC-PR = {ap:.4f} | AUC-ROC = {auc:.4f} | Brier = {brier:.5f} | "
               f"mean pred = {train_pred.mean():.4f}")
 
         df_train[pred_col] = train_pred * (1-df_train['short']/1.5)
@@ -816,69 +1225,77 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
         fit_tier(name)
         pred_cols.append("pred_" + name.replace(" ", "_"))
 
+    def enforce_strict_monotone_survival(arr, base_gap=1e-3):
+        """
+        Keep cumulative tier probabilities monotone while preserving a small
+        positive gap between adjacent tiers so the implied continuous
+        distribution does not collapse entire intervals to zero mass.
+        """
+        surv = np.clip(np.asarray(arr, dtype=float), 0.0, 1.0).copy()
+        if surv.ndim == 1:
+            surv = surv.reshape(1, -1)
+
+        surv = np.minimum.accumulate(surv, axis=1)
+        n_cols = surv.shape[1]
+        if n_cols <= 1:
+            return surv
+
+        for i in range(surv.shape[0]):
+            row = surv[i].copy()
+            gap = min(base_gap, max(row[0], 1e-6) / max(n_cols + 1, 1))
+            for j in range(1, n_cols):
+                upper = max(row[j - 1] - gap, 0.0)
+                if row[j] >= upper:
+                    row[j] = upper
+            surv[i] = row
+        return surv
+
     # probability must be <= the previous tier's
     for frame in (df_train, df_test):
-        mono = np.minimum.accumulate(frame[pred_cols].to_numpy(dtype=float), axis=1)
+        mono = enforce_strict_monotone_survival(frame[pred_cols].to_numpy(dtype=float))
         frame[pred_cols] = mono
 
     # derive dpm distribution moments/quantiles from tier probabilities
-    # Using monotone nested-tier probabilities as a discrete survival function,
-    # produce mean/median/quantiles consistent with tier preds.
+    # Treat the nested tier probabilities as survival values at fixed DPM
+    # cutoffs and build a continuous piecewise-linear quantile function.
+    # This is cheap, monotone, and distribution-like without per-row fitting.
     floor = -5.0
-    dpm_cap = max(float(df_train["dpm"].max()), 4.5)
-    lo = np.array([-5.0, -1.0, 0.0, 1.0, 2.0, 4.5], dtype=float)
-    hi = np.array([-1.0, 0.0, 1.0, 2.0, 4.5, dpm_cap], dtype=float)
+    lower_tail = min(float(df_train["dpm"].quantile(0.01)), floor - 0.75)
+    upper_tail = max(float(df_train["dpm"].quantile(0.99)), 5.5)
+    x_knots = np.array([lower_tail, -5.0, -1.0, 0.0, 1.0, 2.0, 4.5, upper_tail], dtype=float)
 
     def summarize_dpm_distribution(frame):
-        surv = frame[pred_cols].to_numpy(dtype=float)
-        surv = np.clip(np.minimum.accumulate(surv, axis=1), 0.0, 1.0)
+        surv = enforce_strict_monotone_survival(frame[pred_cols].to_numpy(dtype=float))
+        cdf_core = 1.0 - surv
+        mean = np.empty(len(cdf_core), dtype=float)
+        p05 = np.empty(len(cdf_core), dtype=float)
+        p25 = np.empty(len(cdf_core), dtype=float)
+        p50 = np.empty(len(cdf_core), dtype=float)
+        p75 = np.empty(len(cdf_core), dtype=float)
+        p95 = np.empty(len(cdf_core), dtype=float)
 
-        # atom at floor + segment masses between thresholds
-        atom = np.clip(1.0 - surv[:, 0], 0.0, 1.0)
-        seg_probs = np.column_stack([
-            surv[:, 0] - surv[:, 1],
-            surv[:, 1] - surv[:, 2],
-            surv[:, 2] - surv[:, 3],
-            surv[:, 3] - surv[:, 4],
-            surv[:, 4] - surv[:, 5],
-            surv[:, 5],
-        ])
-        seg_probs = np.clip(seg_probs, 0.0, None)
+        for i in range(len(cdf_core)):
+            core = np.clip(cdf_core[i], 1e-4, 1.0 - 1e-4)
+            probs = np.empty(len(core) + 2, dtype=float)
+            probs[0] = 0.0
+            probs[-1] = 1.0
+            probs[1:-1] = core
 
-        # normalize for numerical stability
-        total = atom + seg_probs.sum(axis=1)
-        total = np.where(total > 0, total, 1.0)
-        atom = atom / total
-        seg_probs = seg_probs / total[:, None]
+            for j in range(1, len(probs)):
+                if probs[j] <= probs[j - 1]:
+                    probs[j] = min(probs[j - 1] + 1e-4, 1.0)
 
-        # mean under atom-at-floor + uniform-within-segment approximation
-        mids = 0.5 * (lo + hi)
-        mean = atom * floor + (seg_probs * mids).sum(axis=1)
+            if probs[-1] <= probs[-2]:
+                probs[-2] = min(probs[-1] - 1e-4, max(probs[-3] + 1e-4, 0.0))
 
-        def quantile(q):
-            out = np.empty(len(atom), dtype=float)
-            for i in range(len(atom)):
-                if q <= atom[i]:
-                    out[i] = floor
-                    continue
-                rem = q - atom[i]
-                for j in range(seg_probs.shape[1]):
-                    m = seg_probs[i, j]
-                    if rem <= m or j == seg_probs.shape[1] - 1:
-                        if m <= 1e-12:
-                            out[i] = lo[j]
-                        else:
-                            frac = min(max(rem / m, 0.0), 1.0)
-                            out[i] = lo[j] + frac * (hi[j] - lo[j])
-                        break
-                    rem -= m
-            return out
+            # Quantile function is linear between knot probabilities.
+            mean[i] = np.sum(0.5 * (x_knots[:-1] + x_knots[1:]) * np.diff(probs))
+            p05[i] = np.interp(0.05, probs, x_knots)
+            p25[i] = np.interp(0.25, probs, x_knots)
+            p50[i] = np.interp(0.50, probs, x_knots)
+            p75[i] = np.interp(0.75, probs, x_knots)
+            p95[i] = np.interp(0.95, probs, x_knots)
 
-        p05 = quantile(0.05)
-        p25 = quantile(0.25)
-        p50 = quantile(0.50)  # median
-        p75 = quantile(0.75)
-        p95 = quantile(0.95)
         return mean, p05, p25, p50, p75, p95
 
     tr_mean, tr_p05, tr_p25, tr_p50, tr_p75, tr_p95 = summarize_dpm_distribution(df_train)
@@ -939,9 +1356,24 @@ player_stats = player_stats[['player','age','pid', 'team','season','class', 'hgt
 del test_reduced,made_nba
 
 #%% mahalanobis distance algo
-def distance2(pid, yr, full_matrix, data_copy, weights_copy, missing_mask_copy, print_df):
-    data_copy = data_copy.reindex(full_matrix.index)
-    missing_mask_copy = missing_mask_copy.reindex(full_matrix.index).fillna(False)
+def distance2(pid, yr, full_matrix, data_copy, weights_copy, print_df):
+    data_copy = data_copy[data_copy.index.isin(full_matrix.index)]
+    
+    cov = np.ma.cov(np.ma.masked_invalid(data_copy), rowvar=False)    
+    try:
+        invcov = np.linalg.inv(cov)
+    except np.linalg.LinAlgError:
+        # If covariance is singular, use pseudo-inverse
+        invcov = np.linalg.pinv(cov)
+    
+    # Map skewed & zero-inflated data into a normal space while preserving rank & outliers
+    #transformer = QuantileTransformer(output_distribution='normal', random_state=42)
+    #transformed_data = transformer.fit_transform(data_copy)
+    
+    # Fit Ledoit-Wolf Shrinkage on the transformed rank space
+    #lw = LedoitWolf().fit(transformed_data)
+    #cov = lw.covariance_
+    #invcov = lw.precision_
 
     # Get player data
     player_data = full_matrix.loc[(full_matrix['pid'] == pid) & (full_matrix['season'] == yr)]
@@ -950,48 +1382,27 @@ def distance2(pid, yr, full_matrix, data_copy, weights_copy, missing_mask_copy, 
     else: player_data = full_matrix.loc[(full_matrix['player'] == name) & (full_matrix['season'] == yr)]
     """
     player_index = player_data.index[0]
-    player = data_copy.loc[player_index]
-    pvec = player.to_numpy(dtype=float)
+    player = data_copy.iloc[player_index] # data_copy
+    pvec = np.ma.masked_invalid(np.array(player))
 
-    data_array = data_copy.to_numpy(dtype=float)
-    delta_matrix = data_array - pvec
+    data_array = np.ma.masked_invalid(data_copy.to_numpy()) # data_copy
+    delta_matrix = data_array - pvec #data_array
 
-    feature_weights = np.asarray(weights_copy, dtype=float)
-    if len(feature_weights) != data_copy.shape[1]:
-        raise ValueError("Feature weights length must match the number of distance features")
-    feature_weights = np.clip(feature_weights, 1e-6, None)
+    # adding custom weights to the covariance matrix
+    weighted_invcov = weights_copy[:, None] * invcov * weights_copy[None, :]
 
-    player_mask = missing_mask_copy.loc[player_index].to_numpy(dtype=bool)
-    mask_array = missing_mask_copy.to_numpy(dtype=bool)
-    shared_mask = mask_array & player_mask
-    overlap_count = shared_mask.sum(axis=1)
-    total_features = data_copy.shape[1]
-
-    weighted_sq = np.square(delta_matrix) * feature_weights[None, :]
-    shared_weighted_sq = np.where(shared_mask, weighted_sq, 0.0)
-    temp = shared_weighted_sq.sum(axis=1)
-
-    valid_overlap = overlap_count > 0
-    overlap_scale = np.full(len(overlap_count), np.inf, dtype=float)
-    overlap_scale[valid_overlap] = total_features / overlap_count[valid_overlap]
-    temp = temp * overlap_scale
+    #temp = np.einsum('ij,jk,ik->i', delta_matrix, invcov, delta_matrix)
+    temp = np.einsum('ij,jk,ik->i', delta_matrix, weighted_invcov, delta_matrix)
     temp = np.clip(temp, 0.0, None)
     dist_array = np.sqrt(temp)
 
-    overlap_ratio = np.zeros(len(overlap_count), dtype=float)
-    overlap_ratio[valid_overlap] = overlap_count[valid_overlap] / total_features
-    score_array = np.exp(-0.5 * temp) * np.power(overlap_ratio, 1.5)
-
-    player_pos = data_copy.index.get_loc(player_index)
-    dist_array[player_pos] = 0
-    score_array[player_pos] = 1.0
+    dist_array[player_index] = 0
 
     full_matrix['mdist'] = dist_array
-    full_matrix['overlap_ratio'] = overlap_ratio
     full_matrix = full_matrix[['player', 'team', 'season', 'hgt', 'bpm', 'mdist', 'pid']]
-    full_matrix['score'] = score_array
+    full_matrix['score'] = 1 / (full_matrix['mdist'] ** 2) # np.exp(-full_matrix['mdist']*full_matrix['mdist']/2)
     full_matrix = full_matrix.sort_values(by='score', ascending=False)
- 
+
     #if(len(full_matrix[full_matrix['mdist']<=3])>100): full_matrix = full_matrix.head(100)
     #elif(len(full_matrix[full_matrix['mdist']<=3])<50): full_matrix = full_matrix.head(50)
     #else: full_matrix = full_matrix[full_matrix['mdist']<=3]
@@ -1478,8 +1889,8 @@ def calibrated_probability(n_s,n_t,p0=0.04,m=1,gamma=1.1,inflection=0.25,steepne
     return p_final
 
 def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
-    #dist = distance2(x, year, p_stats.copy(), data.copy(), data_missing_mask.copy(), print_val)
-    dist = distance2(x, year, p_stats, data, cor_weights, data_missing_mask, print_val)
+    #dist = distance2(x, year, p_stats.copy(), data.copy(), print_val)
+    dist = distance2(x, year, p_stats, data, cor_weights, print_val)
     dist = dist.drop_duplicates(subset=['player'], keep='first')
     dist['weights'] = np.exp(-dist['mdist'])
     
@@ -1866,8 +2277,8 @@ def hyperparameter_tuning(n,test):
         else:correl_weights = get_analytical_weights_randomized(data,i)
         
         print(correl_weights)
-        draft_list = mdist_list(latest_season, player_stats.copy(), correl_weights.copy(), 0, 0)
-        #draft_list = ensemble_draft_model(test,0.6,0)
+        #draft_list = mdist_list(latest_season, player_stats.copy(), correl_weights.copy(), 0, 0)
+        draft_list = ensemble_draft_model(test,0.6,0)
 
         draft_list = draft_list.merge(draft_outcomes[['pid','season_x','dpm']], on='pid', how='left')
         draft_list['dpm'] = draft_list['dpm'].fillna(-5) #-4
