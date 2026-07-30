@@ -231,6 +231,9 @@ def plot_histograms(df):
     plt.show()
 
 #%% player classification
+
+#season_nba_mins = mins_per_season(latest_season-1)
+
 def extract_player_stats():
     headers = pd.read_csv(f'{path}/player/header.csv')
     internationals = international_stats_adjustments()
@@ -525,9 +528,6 @@ def get_analytical_weights_randomized(X,i):
 
     return np.array(optimal_weights)
 
-#%% nba mins per season (for padding the DARKO values for backup centers)
-#season_nba_mins = mins_per_season(latest_season-1)
-
 #%% function to map nba stats
 def extract_nba_stats(year):
     nba_stats_y = pd.read_excel(f'{path}/nba_stats.xlsx','DARKO')
@@ -554,7 +554,14 @@ def extract_nba_stats(year):
     
     nba_stats_y['o_dpm'] = (nba_stats_y['o_dpm'] * nba_stats_y['Minutes'] + -3 * nba_stats_y['th'])/(nba_stats_y['Minutes'] + nba_stats_y['th']) #-2.5
     nba_stats_y['d_dpm'] = (nba_stats_y['d_dpm'] * nba_stats_y['Minutes'] + -2 * nba_stats_y['th'])/(nba_stats_y['Minutes'] + nba_stats_y['th']) #-1.5
-    nba_stats_y['age_adj'] = nba_stats_y['age'].round()
+    #integer age estimate
+    min_age_season = nba_stats_y.groupby(['nba_id', 'player_name'])[['age','season_x']].min().reset_index()
+    min_age_season['age_adj'] = min_age_season['age'].apply(np.ceil) - 1 #!!!Verify this
+    min_age_season.columns = ['nba_id', 'player_name', 'age', 'season_min', 'age_adj']
+    min_age_season = min_age_season[['nba_id','player_name','season_min','age_adj']]
+    nba_stats_y = nba_stats_y.merge(min_age_season, on=['nba_id','player_name'], how='left')
+    nba_stats_y['age_adj'] += nba_stats_y['season_x'] - nba_stats_y['season_min']
+    #nba_stats_y['age_adj'] = nba_stats_y['age'].apply(np.ceil) #.round()
     
     sample_df = nba_stats_y[['player_name','season_x','Minutes','age_adj','o_dpm','d_dpm','pid']]
     sample_df = sample_df[sample_df['season_x']<=year]
@@ -571,7 +578,7 @@ def extract_nba_stats(year):
 
 def dpm_forecaster_new(df):
     # ── constants ─────────────────────────────────────────────────────────────
-    AGE_MIN, AGE_MAX = 19, 40
+    AGE_MIN, AGE_MAX = 18, 40
     AGES        = list(range(AGE_MIN, AGE_MAX + 1))
     TIER_NAMES  = ["allnba", "allstar", 'good', "rotation", "fringe", "marginal"]
     N_TIERS     = len(TIER_NAMES)
@@ -1072,13 +1079,14 @@ def outcomes(df):
     #nba_stats = extract_nba_stats(season)
     player_peaks = df.groupby('pid')[['o_dpm','d_dpm']].agg(lambda x: x.nlargest(5).mean())
     player_peaks = player_peaks.reset_index()
-    player_bio = df.pivot_table(index='pid',values=['player_name','season_x'],aggfunc='first')
+    player_bio = df[df['is_observed']==True].pivot_table(index='pid',values=['player_name','season_x'],aggfunc='first')
     player_bio = player_bio.reset_index()
     player_outcomes = player_bio.merge(player_peaks, on='pid', how='left')
     player_outcomes['dpm'] = 1*player_outcomes['o_dpm'] + 1*player_outcomes['d_dpm']
     player_outcomes['season_x'] -= 1
     player_outcomes = player_outcomes.merge(player_stats[['pid','player']].drop_duplicates(), on='pid', how='left')
     player_outcomes = player_outcomes[['pid', 'player', 'season_x', 'o_dpm', 'd_dpm', 'dpm']]
+    player_outcomes = player_outcomes.drop_duplicates(subset=['pid'], keep='last')
     return player_outcomes
 
 def p_nba_scaling(league_stats,p_stats):
@@ -1129,14 +1137,17 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
     df_test = df_sorted[df_sorted["season"] == latest_season].copy()
 
     # deterministic, order-preserving feature list (drop the categorical "role")
-    columns_considered = correl_columns + interaction_columns + ['adj_rating','intl']
+    columns_considered = correl_columns + interaction_columns + ['adj_rating', 'intl']
     columns_considered.remove('role')
-    #seen = set()
-    #columns_considered = [c for c in (correl_columns + interaction_columns )
-    #                      if c != "role" and not (c in seen or seen.add(c))]
 
     X = df_train[columns_considered].to_numpy(dtype=float)
     X_test = df_test[columns_considered].to_numpy(dtype=float)
+
+    eps = 1e-6
+
+    def to_logit(p):
+        p = np.clip(p, eps, 1 - eps)
+        return np.log(p / (1 - p)).reshape(-1, 1)
 
     def make_model(spw):
         # strong regularization + shallow trees to avoid memorizing the rare class
@@ -1157,12 +1168,6 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
             max_delta_step=1,
             random_state=42,
         )
-
-    eps = 1e-6
-
-    def to_logit(p):
-        p = np.clip(p, eps, 1 - eps)
-        return np.log(p / (1 - p)).reshape(-1, 1)
 
     def fit_tier(name):
         y = df_train[name].to_numpy(dtype=int)
@@ -1218,7 +1223,6 @@ def regression_draft_model(league_stats, pre_nba_data, pre_nba_raw, train_season
 
         df_train[pred_col] = train_pred * (1-df_train['short']/1.5)
         df_test[pred_col] = test_pred * (1-df_test['short']/1.5)
-        #df_test[pred_col] = np.where(df_test['short']>=1,test_pred/2,test_pred)
 
     pred_cols = []
     for name in tier_names:
@@ -1764,6 +1768,8 @@ def model_accuracy_measurement(stats_df,start,end,results_file):
                           'observed mvp', 'model rotation','model starter','model all star','model all nba','model mvp']]
     correlations = [['year','sample size','correlation','rmse']]
     spearman = [['year','sample size','mean DPM rho','rotation rho','starter rho','allstar rho','allnba rho']]
+    spearman2 = [['year','sample size','mean DPM rho','median DPM rho','P75 DPM rho','P95 DPM rho',
+                  'full mean DPM rho','full median DPM rho','full P75 DPM rho','full P95 DPM rho']]
     kendall = [['year','sample size','mean DPM tau','rotation tau','starter tau','allstar tau','allnba tau']]
     brier_scores = [['year','sample size','rotation brier score','starter brier score','all star brier score','all nba brier score']]
     log_loss_score = [['year','sample size','rotation log loss','starter log loss','all star log loss','all nba log loss']]
@@ -1794,6 +1800,10 @@ def model_accuracy_measurement(stats_df,start,end,results_file):
         #check if this is needed
         model_pred = model_pred[~(model_pred['season_x']<i)]
         model_pred2 = model_pred[(model_pred['season_x']==i)&(model_pred['dpm']>-5)]
+        #to prevent nan values affecting the result
+        model_pred['mean DPM'] = model_pred['mean DPM'].fillna(-5)
+        model_pred2['mean DPM'] = model_pred2['mean DPM'].fillna(-5)
+        
         try: allnba_log_loss = log_loss(model_pred['a_all nba'], model_pred['all nba'])
         except ValueError: allnba_log_loss = 0
         
@@ -1812,6 +1822,16 @@ def model_accuracy_measurement(stats_df,start,end,results_file):
                         spearmanr(model_pred2['a_starter'], model_pred2['dpm'])[0],
                         spearmanr(model_pred2['a_all star'], model_pred2['dpm'])[0],
                         spearmanr(model_pred2['a_all nba'], model_pred2['dpm'])[0]])
+        
+        spearman2.append([i,len(model_pred2),
+                         spearmanr(model_pred2['mean DPM'], model_pred2['dpm'])[0],
+                         spearmanr(model_pred2['median DPM'], model_pred2['dpm'])[0],
+                         spearmanr(model_pred2['P75 DPM'], model_pred2['dpm'])[0],
+                         spearmanr(model_pred2['P95 DPM'], model_pred2['dpm'])[0],
+                         spearmanr(model_pred['mean DPM'], model_pred['dpm'])[0],
+                         spearmanr(model_pred['median DPM'], model_pred['dpm'])[0],
+                         spearmanr(model_pred['P75 DPM'], model_pred['dpm'])[0],
+                         spearmanr(model_pred['P95 DPM'], model_pred['dpm'])[0]])
         
         kendall.append([i,len(model_pred2),
                         kendalltau(model_pred2['mean DPM'], model_pred2['dpm'])[0],
@@ -1855,13 +1875,14 @@ def model_accuracy_measurement(stats_df,start,end,results_file):
     observed_outcomes = list_to_df(observed_outcomes)
     correlations = list_to_df(correlations)
     spearman = list_to_df(spearman)
+    spearman2 = list_to_df(spearman2)
     kendall = list_to_df(kendall)
     brier_scores = list_to_df(brier_scores)
     log_loss_score = list_to_df(log_loss_score)
     roc_auc = list_to_df(roc_auc)
     pr_auc = list_to_df(pr_auc)
     pr_gain = list_to_df(pr_gain)
-    return observed_outcomes,correlations,spearman,kendall,brier_scores,log_loss_score,roc_auc,pr_auc,pr_gain
+    return observed_outcomes,correlations,spearman,kendall,brier_scores,log_loss_score,roc_auc,pr_auc,pr_gain,spearman2
     
 def weighted_mean(var, wts):
     return np.average(var, weights=wts)
@@ -1959,7 +1980,7 @@ def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
         p_nba2 = nba_comps/tot_comps
         p_nba2 = calibrated_probability(nba_comps * padding, tot_comps)
         
-        p_nba =  0.2*p_nba1*padding + 0.8*p_nba2*padding #0*p_nba0*padding
+        p_nba =  0.05*p_nba1*padding + 0.95*p_nba2*padding #0*p_nba0*padding
         #p_nba *= np.exp((p_nba-1)/2.5) # padding * rotation_scale_factor
         if(p_nba>=1): p_nba = 1
         
@@ -2325,12 +2346,12 @@ def ensemble_draft_model(draft_list2,w,flag):
     draft_list_full['mvp'] = w*draft_list_full['mvp'] + (1-w)*draft_list_full['pred_mvp']
 
     #verify this
-    draft_list_full['mean DPM'] = +6 * draft_list_full['mvp'] + \
-                                  +3.5 * (draft_list_full['all nba'] - draft_list_full['mvp']) + \
-                                  +1.5 * (draft_list_full['all star'] - draft_list_full['all nba']) + \
+    draft_list_full['mean DPM'] = +7 * draft_list_full['mvp'] + \
+                                  +4 * (draft_list_full['all nba'] - draft_list_full['mvp']) + \
+                                  +2 * (draft_list_full['all star'] - draft_list_full['all nba']) + \
                                   +0.5 * (draft_list_full['starter'] - draft_list_full['all star']) + \
                                   -0.5 * (draft_list_full['rotation'] - draft_list_full['starter']) + \
-                                  -2 * (draft_list_full['makes NBA'] - draft_list_full['rotation']) + \
+                                  -1.75 * (draft_list_full['makes NBA'] - draft_list_full['rotation']) + \
                                   -5 * (1 - draft_list_full['makes NBA'])
                                 
     #draft_list_full['mean DPM'] = w*draft_list_full['mean DPM'] + (1-w)*draft_list_full['pred_dpm']
