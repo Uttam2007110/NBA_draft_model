@@ -513,7 +513,10 @@ def get_analytical_weights(X):
     optimal_weights = [1,1.15,0.9,1,0.95,1,1,1.05,0.95,1.05,1,1,1,1,1,1,1,1,1,0.9,1.25,1.05,0.9,1.1, 1,1,1,1, 
                        1.15,0.9,0.9,0.75]
     
-    #v6, post grid search after adding interaction terms  
+    #v6, post grid search after adding interaction terms
+    #optimal_weights = [.5, 1.25, 1.25, 1.25, 1.25, 1.1, .75, .75, 1.5, .5, 1.5, .75, 1.1, .9, .75, 1.5, .75, 1.25, 1, .75, 1.25, 1.5, 1, .9, 1, .5, 1, 1.1, 1.1, 1.5, 1.25, 1.25]
+    optimal_weights = [1,0.9,1.25,1.1,0.9,1.25,1.1,0.9,1,0.75,1.1,1.1,1,1.1,1.1,1.25,0.9,1.25,0.9,1.1,1.5,0.5,0.5,1.1,1.5,0.5,0.9,0.5,0.5,0.75,0.9,1.1]
+    #optimal_weights = [1.1, 1.5, 1.25, .9, 1, 1.5, .5, 1.5, 1, .5, .5, .9, .5, 1.1, 1, 1, 1.1, 1.5, .75, 1, 1.5, .75, 1.1, .5, .9, .5, 1.5, 1.1, .75, 1, 1.1, 1.5]
     return np.array(optimal_weights)
 
 def get_analytical_weights_randomized(X,i):
@@ -577,20 +580,20 @@ def extract_nba_stats(year):
     return nba_stats_y
 
 def dpm_forecaster_new(df):
-    # ── constants ─────────────────────────────────────────────────────────────
+    # â”€â”€ constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     AGE_MIN, AGE_MAX = 18, 40
     AGES        = list(range(AGE_MIN, AGE_MAX + 1))
     TIER_NAMES  = ["allnba", "allstar", 'good', "rotation", "fringe", "marginal"]
     N_TIERS     = len(TIER_NAMES)
 
-    # Four percentile cut-points on total_dpm → five tiers (top → bottom).
+    # Four percentile cut-points on total_dpm â†’ five tiers (top â†’ bottom).
     # Evaluated per age so the same raw DPM can rank differently at 22 vs 35.
     PCTILE_CUTS     = [95, 90, 75, 50, 25, 5]
-    AGE_WINDOW      = 1      # ± seasons included when computing per-age stats
+    AGE_WINDOW      = 1      # Â± seasons included when computing per-age stats
     MIN_CELL_OBS    = 8      # fall back to global percentile if fewer obs at age
     RECENCY_DECAY   = 1.5    # exponential decay rate across observed seasons
 
-    # ── Step 1: per-age tier boundaries ───────────────────────────────────────
+    # â”€â”€ Step 1: per-age tier boundaries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     obs = df.dropna(subset=["o_dpm", "d_dpm"]).copy()
     obs["total_dpm"] = obs["o_dpm"] + obs["d_dpm"]
     obs["age_int"]   = obs["age_adj"].round().astype(int).clip(AGE_MIN, AGE_MAX)
@@ -617,7 +620,7 @@ def dpm_forecaster_new(df):
     obs["tier_idx"] = [_tier_idx(r.total_dpm, r.age_int)
                        for r in obs.itertuples(index=False)]
 
-    # ── Step 2: piecewise quadratic aging curves per tier ─────────────────────
+    # â”€â”€ Step 2: piecewise quadratic aging curves per tier â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     # Each tier curve is now TWO quadratics with a shared peak:
     #   young side (age <= peak):  y = peak_val + a_left  * (age - peak_age)^2
     #   old side   (age >  peak):  y = peak_val + a_right * (age - peak_age)^2
@@ -801,7 +804,7 @@ def dpm_forecaster_new(df):
             for age in AGES
         })
 
-    # ── print piecewise curvature diagnostics ──────────────────────────────────
+    # â”€â”€ print piecewise curvature diagnostics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print("[aging curves] Piecewise quadratic curvatures by tier:")
     print(f"  {'tier':>9} | {'o_dpm':^39} | {'d_dpm':^39} | {'minutes':^39}")
     for t, tname in enumerate(TIER_NAMES):
@@ -811,7 +814,7 @@ def dpm_forecaster_new(df):
         )
         print(f"  {tname:>9} | {fmt(co)} | {fmt(cd)} | {fmt(cm)}")
 
-    # ── print tier threshold summary ──────────────────────────────────────────
+    # â”€â”€ print tier threshold summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     sample_ages = [20, 23, 26, 29, 32, 35, 38]
     print("\n[thresholds] Age-specific total-DPM tier boundaries (sample ages):")
     header = f"  {'tier':>9} | " + " | ".join(f"age {a}" for a in sample_ages)
@@ -822,7 +825,7 @@ def dpm_forecaster_new(df):
         )
         print(row)
 
-    # ── helpers for per-player computation ───────────────────────────────────
+    # â”€â”€ helpers for per-player computation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _norm_logpdf(x, mu, sigma):
         """Gaussian log-density (no scipy needed)."""
         sigma = max(float(sigma), 1e-6)
@@ -862,7 +865,7 @@ def dpm_forecaster_new(df):
 
     def _residuals(obs_rows, rw):
         """
-        Per-tier recency-weighted residual: player's observed value − tier curve.
+        Per-tier recency-weighted residual: player's observed value âˆ’ tier curve.
         Returns arrays of shape (N_TIERS,) for o, d, minutes.
         """
         res_o = np.zeros(N_TIERS)
@@ -880,9 +883,9 @@ def dpm_forecaster_new(df):
                     res_m[t] += rw[i] * (m - c["minutes"])
         return res_o, res_d, res_m
 
-    # ── per-player projection ─────────────────────────────────────────────────
+    # â”€â”€ per-player projection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _project_player(player_data):
-        # build age → {o, d, m} lookup; for duplicate ages keep most-minutes row
+        # build age â†’ {o, d, m} lookup; for duplicate ages keep most-minutes row
         known = {}
         for _, row in player_data.sort_values("Minutes",
                                               ascending=False,
@@ -897,7 +900,7 @@ def dpm_forecaster_new(df):
                     if pd.notna(row["season_x"]) else None,
                 }
 
-        # player-specific season-age mapping: season_x ≈ age + offset
+        # player-specific season-age mapping: season_x â‰ˆ age + offset
         season_rows = player_data.dropna(subset=["season_x", "age_adj"])
         if len(season_rows) > 0:
             season_offset = float(
@@ -934,7 +937,7 @@ def dpm_forecaster_new(df):
             else:
                 season_x = None
 
-            # ── DPM ──────────────────────────────────────────────────────────
+            # â”€â”€ DPM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if is_observed and entry["o"] is not None:
                 pred_o, pred_d = entry["o"], entry["d"]
                 per_tier_od = {
@@ -955,7 +958,7 @@ def dpm_forecaster_new(df):
                 pred_d = float(sum(tp[t] * per_tier_od[TIER_NAMES[t]][1]
                                    for t in range(N_TIERS)))
 
-            # ── Minutes ───────────────────────────────────────────────────────
+            # â”€â”€ Minutes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if is_observed and entry["m"] is not None:
                 pred_m = entry["m"]
             else:
@@ -983,7 +986,7 @@ def dpm_forecaster_new(df):
 
         return pd.DataFrame(results)
 
-    # ── project all players ───────────────────────────────────────────────────
+    # â”€â”€ project all players â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     df = df.copy()
     df["_gkey"] = df["player_name"].astype(str) + "||" + df["pid"].astype(str)
     groups = list(df.groupby("_gkey", sort=False))
@@ -1002,7 +1005,7 @@ def dpm_forecaster_new(df):
     pair_cols = [f"o_dpm_{t}" for t in TIER_NAMES] + [f"d_dpm_{t}" for t in TIER_NAMES]
     out = out[["player_name", "pid", "season_x", "age", "o_dpm", "d_dpm", "dpm",
                "minutes", "is_observed", "tier"] + prob_cols + pair_cols]
-    print(f"Done. {out.shape[0]:,} rows ({len(groups)} players × "
+    print(f"Done. {out.shape[0]:,} rows ({len(groups)} players Ã— "
           f"{AGE_MAX - AGE_MIN + 1} ages)")
     return out
     return out
@@ -1393,6 +1396,14 @@ def distance2(pid, yr, full_matrix, data_copy, weights_copy, print_df):
     delta_matrix = data_array - pvec #data_array
 
     # adding custom weights to the covariance matrix
+    # Ensure weights match the number of features in the covariance matrix
+    n_features = invcov.shape[0]
+    if len(weights_copy) > n_features:
+        weights_copy = weights_copy[:n_features]
+    elif len(weights_copy) < n_features:
+        # Pad with ones if weights vector is too short
+        weights_copy = np.concatenate([weights_copy, np.ones(n_features - len(weights_copy))])
+    
     weighted_invcov = weights_copy[:, None] * invcov * weights_copy[None, :]
 
     #temp = np.einsum('ij,jk,ik->i', delta_matrix, invcov, delta_matrix)
@@ -1567,7 +1578,7 @@ def _apply_kurtosis_mixture_improved(x, mu, k_target, delta):
         alpha = np.sqrt(np.clip(alpha_sq, 0.0, 0.95))
     else:
         # Low kurtosis regime (approximate)
-        # k ≈ 2α² / (1 - α²/2) => α² ≈ k / (2 + k)
+        # k â‰ˆ 2Î±Â² / (1 - Î±Â²/2) => Î±Â² â‰ˆ k / (2 + k)
         alpha_sq = k_residual / (2.0 + k_residual)
         alpha = np.sqrt(alpha_sq)
     
@@ -1758,6 +1769,127 @@ def pr_gain_area(y_true,y_scores):
         area += dx * avg_height
     return area
 
+def compute_calibration(pred_probs, actual_binary, n_bins=10):
+    """
+    Returns (mean_pred, frac_pos, bin_counts) arrays.
+    Bins by predicted probability; empty bins are dropped.
+    """
+    bins = np.linspace(0.0, 1.0, n_bins + 1)
+    mean_pred, frac_pos, counts = [], [], []
+    for lo, hi in zip(bins[:-1], bins[1:]):
+        mask = (pred_probs >= lo) & (pred_probs < hi)
+        if mask.sum() == 0:
+            continue
+        mean_pred.append(float(pred_probs[mask].mean()))
+        frac_pos.append(float(actual_binary[mask].mean()))
+        counts.append(int(mask.sum()))
+    return np.array(mean_pred), np.array(frac_pos), np.array(counts)
+
+
+def compute_dpm_calibration(pred_dpm, actual_dpm, n_bins=10):
+    """
+    Returns (mean_pred, mean_actual, bin_counts) binned by predicted DPM
+    using equal-frequency (quantile) edges.
+    """
+    finite = np.isfinite(pred_dpm) & np.isfinite(actual_dpm)
+    pred_dpm, actual_dpm = pred_dpm[finite], actual_dpm[finite]
+    if len(pred_dpm) == 0:
+        return np.array([]), np.array([]), np.array([])
+    percentiles = np.linspace(0, 100, n_bins + 1)
+    edges = np.percentile(pred_dpm, percentiles)
+    edges[-1] += 1e-6
+    mean_pred, mean_actual, counts = [], [], []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        mask = (pred_dpm >= lo) & (pred_dpm < hi)
+        if mask.sum() == 0:
+            continue
+        mean_pred.append(float(pred_dpm[mask].mean()))
+        mean_actual.append(float(actual_dpm[mask].mean()))
+        counts.append(int(mask.sum()))
+    return np.array(mean_pred), np.array(mean_actual), np.array(counts)
+
+
+def plot_calibration(calib_data, tier_cols, dpm_labels, year):
+    """
+    Two-row reliability diagram.
+    Row 0: tier probability calibration (reliability diagram).
+    Row 1: DPM prediction calibration (predicted vs actual mean).
+    """
+    n_tier = len(tier_cols)
+    n_dpm  = len(dpm_labels)
+    ncols  = max(n_tier, n_dpm)
+    fig, axes = plt.subplots(2, ncols, figsize=(5 * ncols, 9))
+
+    for col_i, tier in enumerate(tier_cols):
+        ax = axes[0, col_i]
+        mp, fp, cnt = calib_data[f'tier_{tier}']
+        ax.plot([0, 1], [0, 1], 'k--', lw=1)
+        sc = ax.scatter(mp, fp, s=cnt / max(cnt.max(), 1) * 300 + 20,
+                        c=cnt, cmap='Blues', edgecolors='steelblue', zorder=3)
+        ax.plot(mp, fp, '-o', color='steelblue', markersize=4)
+        ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+        ax.set_xlabel('Mean predicted probability')
+        ax.set_ylabel('Observed fraction')
+        ax.set_title(f'Reliability: {tier} ({year})')
+        plt.colorbar(sc, ax=ax, label='n')
+        ax.grid(alpha=0.3)
+        weights = cnt / max(cnt.sum(), 1)
+        ece = float(np.sum(weights * np.abs(mp - fp)))
+        ax.annotate(f'ECE = {ece:.3f}', xy=(0.05, 0.92), xycoords='axes fraction',
+                    fontsize=9, color='darkred')
+
+    for col_i, label in enumerate(dpm_labels):
+        ax = axes[1, col_i]
+        mp, ma, cnt = calib_data[f'dpm_{label}']
+        if len(mp) == 0:
+            ax.set_visible(False)
+            continue
+        lims = (min(mp.min(), ma.min()) - 0.2, max(mp.max(), ma.max()) + 0.2)
+        ax.plot(lims, lims, 'k--', lw=1)
+        sc = ax.scatter(mp, ma, s=cnt / max(cnt.max(), 1) * 300 + 20,
+                        c=cnt, cmap='Greens', edgecolors='seagreen', zorder=3)
+        ax.plot(mp, ma, '-o', color='seagreen', markersize=4)
+        ax.set_xlim(*lims); ax.set_ylim(*lims)
+        ax.set_xlabel(f'Predicted {label} DPM')
+        ax.set_ylabel('Actual mean DPM')
+        ax.set_title(f'DPM calibration: {label} ({year})')
+        plt.colorbar(sc, ax=ax, label='n')
+        ax.grid(alpha=0.3)
+        mae = float(np.mean(np.abs(mp - ma)))
+        ax.annotate(f'MAE = {mae:.3f}', xy=(0.05, 0.92), xycoords='axes fraction',
+                    fontsize=9, color='darkred')
+
+    for col_i in range(ncols):
+        if col_i >= n_tier: axes[0, col_i].set_visible(False)
+        if col_i >= n_dpm:  axes[1, col_i].set_visible(False)
+
+    plt.tight_layout()
+    plt.suptitle(f'Calibration diagnostics ? {year}', y=1.01, fontsize=12)
+    plt.show()
+
+
+def ndcg_at_k(scores, relevance, k):
+    """
+    NDCG@K where scores are model predictions (higher = better rank)
+    and relevance is actual DPM (continuous gain).
+    """
+    scores = np.asarray(scores, dtype=float)
+    relevance = np.asarray(relevance, dtype=float)
+
+    rel = relevance - relevance.min()
+    k = min(k, len(scores))
+    if k <= 0:
+        return 0.0
+
+    top_idx = np.argsort(scores)[::-1][:k]
+    ideal_idx = np.argsort(rel)[::-1][:k]
+
+    discounts = np.log2(np.arange(1, k + 1) + 1)
+    dcg = np.sum(rel[top_idx] / discounts)
+    idcg = np.sum(rel[ideal_idx] / discounts)
+    return float(dcg / idcg) if idcg > 1e-12 else 0.0
+
+
 def model_accuracy_measurement(stats_df,start,end,results_file):
     from sklearn.metrics import brier_score_loss, log_loss, average_precision_score, roc_auc_score
     from scipy.stats import spearmanr, kendalltau
@@ -1768,8 +1900,14 @@ def model_accuracy_measurement(stats_df,start,end,results_file):
                           'observed mvp', 'model rotation','model starter','model all star','model all nba','model mvp']]
     correlations = [['year','sample size','correlation','rmse']]
     spearman = [['year','sample size','mean DPM rho','rotation rho','starter rho','allstar rho','allnba rho']]
-    spearman2 = [['year','sample size','mean DPM rho','median DPM rho','P75 DPM rho','P95 DPM rho',
-                  'full mean DPM rho','full median DPM rho','full P75 DPM rho','full P95 DPM rho']]
+    spearman2 = [['year','sample size','mean DPM rho','median DPM rho','P75 DPM rho', 'P95 DPM rho']]
+    ndcg = [['year','sample size',
+             'NDCG_10 mean', 'NDCG_10 median', 'NDCG_10 P75', 'NDCG_10 P95',
+             'NDCG_30 mean', 'NDCG_30 median', 'NDCG_30 P75', 'NDCG_30 P95',
+             'NDCG_60 mean', 'NDCG_60 median', 'NDCG_60 P75', 'NDCG_60 P95']]
+    calibration_ece = [['year', 'sample size',
+                         'ECE rotation', 'ECE starter', 'ECE all star', 'ECE all nba',
+                         'DPM MAE mean', 'DPM MAE median', 'DPM MAE P75', 'DPM MAE P95']]
     kendall = [['year','sample size','mean DPM tau','rotation tau','starter tau','allstar tau','allnba tau']]
     brier_scores = [['year','sample size','rotation brier score','starter brier score','all star brier score','all nba brier score']]
     log_loss_score = [['year','sample size','rotation log loss','starter log loss','all star log loss','all nba log loss']]
@@ -1800,9 +1938,9 @@ def model_accuracy_measurement(stats_df,start,end,results_file):
         #check if this is needed
         model_pred = model_pred[~(model_pred['season_x']<i)]
         model_pred2 = model_pred[(model_pred['season_x']==i)&(model_pred['dpm']>-5)]
-        #to prevent nan values affecting the result
+        
+        #-5 for nan mean DPM values
         model_pred['mean DPM'] = model_pred['mean DPM'].fillna(-5)
-        model_pred2['mean DPM'] = model_pred2['mean DPM'].fillna(-5)
         
         try: allnba_log_loss = log_loss(model_pred['a_all nba'], model_pred['all nba'])
         except ValueError: allnba_log_loss = 0
@@ -1827,12 +1965,52 @@ def model_accuracy_measurement(stats_df,start,end,results_file):
                          spearmanr(model_pred2['mean DPM'], model_pred2['dpm'])[0],
                          spearmanr(model_pred2['median DPM'], model_pred2['dpm'])[0],
                          spearmanr(model_pred2['P75 DPM'], model_pred2['dpm'])[0],
-                         spearmanr(model_pred2['P95 DPM'], model_pred2['dpm'])[0],
-                         spearmanr(model_pred['mean DPM'], model_pred['dpm'])[0],
-                         spearmanr(model_pred['median DPM'], model_pred['dpm'])[0],
-                         spearmanr(model_pred['P75 DPM'], model_pred['dpm'])[0],
-                         spearmanr(model_pred['P95 DPM'], model_pred['dpm'])[0]])
-        
+                         spearmanr(model_pred2['P95 DPM'], model_pred2['dpm'])[0]])
+
+        ndcg.append([i, len(model_pred),
+                     ndcg_at_k(model_pred['mean DPM'].to_numpy(),   model_pred['dpm'].to_numpy(), 10),
+                     ndcg_at_k(model_pred['median DPM'].to_numpy(), model_pred['dpm'].to_numpy(), 10),
+                     ndcg_at_k(model_pred['P75 DPM'].to_numpy(),    model_pred['dpm'].to_numpy(), 10),
+                     ndcg_at_k(model_pred['P95 DPM'].to_numpy(),    model_pred['dpm'].to_numpy(), 10),
+                     ndcg_at_k(model_pred['mean DPM'].to_numpy(),   model_pred['dpm'].to_numpy(), 30),
+                     ndcg_at_k(model_pred['median DPM'].to_numpy(), model_pred['dpm'].to_numpy(), 30),
+                     ndcg_at_k(model_pred['P75 DPM'].to_numpy(),    model_pred['dpm'].to_numpy(), 30),
+                     ndcg_at_k(model_pred['P95 DPM'].to_numpy(),    model_pred['dpm'].to_numpy(), 30),
+                     ndcg_at_k(model_pred['mean DPM'].to_numpy(),   model_pred['dpm'].to_numpy(), 60),
+                     ndcg_at_k(model_pred['median DPM'].to_numpy(), model_pred['dpm'].to_numpy(), 60),
+                     ndcg_at_k(model_pred['P75 DPM'].to_numpy(),    model_pred['dpm'].to_numpy(), 60),
+                     ndcg_at_k(model_pred['P95 DPM'].to_numpy(),    model_pred['dpm'].to_numpy(), 60)])
+
+        tier_pred_cols   = ['rotation', 'starter', 'all star', 'all nba']
+        tier_actual_cols = ['a_rotation', 'a_starter', 'a_all star', 'a_all nba']
+        dpm_pred_labels  = ['mean', 'median', 'P75', 'P95']
+        dpm_pred_cols    = ['mean DPM', 'median DPM', 'P75 DPM', 'P95 DPM']
+
+        calib_data = {}
+        ece_row  = [i, len(model_pred)]
+        dmae_row = []
+
+        for tier, actual_col in zip(tier_pred_cols, tier_actual_cols):
+            mp, fp, cnt = compute_calibration(
+                model_pred[tier].to_numpy(dtype=float),
+                model_pred[actual_col].to_numpy(dtype=float),
+            )
+            calib_data[f'tier_{tier}'] = (mp, fp, cnt)
+            weights = cnt / max(cnt.sum(), 1)
+            ece_row.append(float(np.sum(weights * np.abs(mp - fp))) if len(cnt) else np.nan)
+
+        for label, col in zip(dpm_pred_labels, dpm_pred_cols):
+            mp, ma, cnt = compute_dpm_calibration(
+                model_pred[col].to_numpy(dtype=float),
+                model_pred['dpm'].to_numpy(dtype=float),
+            )
+            calib_data[f'dpm_{label}'] = (mp, ma, cnt)
+            dmae_row.append(float(np.mean(np.abs(mp - ma))) if len(cnt) else np.nan)
+
+        calibration_ece.append(ece_row + dmae_row)
+        # uncomment to generate plots during the loop:
+        # plot_calibration(calib_data, tier_pred_cols, dpm_pred_labels, i)
+
         kendall.append([i,len(model_pred2),
                         kendalltau(model_pred2['mean DPM'], model_pred2['dpm'])[0],
                         kendalltau(model_pred2['a_rotation'], model_pred2['dpm'])[0],
@@ -1876,13 +2054,15 @@ def model_accuracy_measurement(stats_df,start,end,results_file):
     correlations = list_to_df(correlations)
     spearman = list_to_df(spearman)
     spearman2 = list_to_df(spearman2)
+    ndcg = list_to_df(ndcg)
+    calibration_ece = list_to_df(calibration_ece)
     kendall = list_to_df(kendall)
     brier_scores = list_to_df(brier_scores)
     log_loss_score = list_to_df(log_loss_score)
     roc_auc = list_to_df(roc_auc)
     pr_auc = list_to_df(pr_auc)
     pr_gain = list_to_df(pr_gain)
-    return observed_outcomes,correlations,spearman,kendall,brier_scores,log_loss_score,roc_auc,pr_auc,pr_gain,spearman2
+    return observed_outcomes,correlations,spearman,kendall,brier_scores,log_loss_score,roc_auc,pr_auc,pr_gain,spearman2,ndcg,calibration_ece
     
 def weighted_mean(var, wts):
     return np.average(var, weights=wts)
@@ -1896,7 +2076,7 @@ def weighted_skew(var, wts):
 def weighted_kurtosis(var, wts):
     return (np.average((var - weighted_mean(var, wts))**4, weights=wts) / weighted_variance(var, wts)**(2))
 
-def calibrated_probability(n_s,n_t,p0=0.04,m=1,gamma=1.1,inflection=0.25,steepness=3,scale_high=1.15):
+def calibrated_probability(n_s,n_t,p0=0.045,m=1,gamma=1.1,inflection=0.25,steepness=3,scale_high=1.05):
     p = (n_s + m*p0) / (n_t + m)
     eps = 1e-9
     p = np.clip(p,eps,1-eps)
@@ -1975,12 +2155,14 @@ def player_comp_analysis(x,year,p_stats,league_stats,cor_weights,print_val):
         if(p_intl == 0 and p_gp <= 10): padding = np.exp(-((1-min(p_gp/25,1))))
         else: padding = 1
 
+        rotation_scale_factor = (0.045/(len(league_stats['pid'].drop_duplicates())/len(p_stats['pid'].drop_duplicates())))**0.45 #!!!Verify this
+
         p_nba1 = p_stats.loc[(p_stats['pid']==x)&(p_stats['season']==year),'pred'].values[0]
         #p_nba0 = p_stats.loc[(p_stats['pid']==x)&(p_stats['season']==year),'pred_big'].values[0]
         p_nba2 = nba_comps/tot_comps
-        p_nba2 = calibrated_probability(nba_comps * padding, tot_comps)
+        p_nba2 = calibrated_probability(nba_comps * padding * rotation_scale_factor, tot_comps)
         
-        p_nba =  0.05*p_nba1*padding + 0.95*p_nba2*padding #0*p_nba0*padding
+        p_nba =  0.5*p_nba1*padding + 0.5*p_nba2*padding #0*p_nba0*padding
         #p_nba *= np.exp((p_nba-1)/2.5) # padding * rotation_scale_factor
         if(p_nba>=1): p_nba = 1
         
@@ -2333,11 +2515,11 @@ def hyperparameter_tuning(n,test):
 #%% ensemble model
 def ensemble_draft_model(draft_list2,w,flag):
     draft_list = mdist_list(latest_season, player_stats.copy(), correl_weights.copy(), 0, flag)
+    draft_list = draft_list.fillna(0)
     #_,draft_list2 = regression_draft_model(nba_stats.copy(),data_full.copy(),player_stats.copy(),latest_season-3)
     
     draft_list = draft_list.reset_index()
     draft_list_full = draft_list.merge(draft_list2, on=['pid','player','team','season'], how='left')
-
     draft_list_full['makes NBA'] = w*draft_list_full['makes NBA'] + (1-w)*draft_list_full['pred_makes_NBA']
     draft_list_full['rotation'] = w*draft_list_full['rotation'] + (1-w)*draft_list_full['pred_rotation']
     draft_list_full['starter'] = w*draft_list_full['starter'] + (1-w)*draft_list_full['pred_starter']
@@ -2345,21 +2527,54 @@ def ensemble_draft_model(draft_list2,w,flag):
     draft_list_full['all nba'] = w*draft_list_full['all nba'] + (1-w)*draft_list_full['pred_all_nba']
     draft_list_full['mvp'] = w*draft_list_full['mvp'] + (1-w)*draft_list_full['pred_mvp']
 
-    #verify this
-    draft_list_full['mean DPM'] = +7 * draft_list_full['mvp'] + \
-                                  +4 * (draft_list_full['all nba'] - draft_list_full['mvp']) + \
-                                  +2 * (draft_list_full['all star'] - draft_list_full['all nba']) + \
-                                  +0.5 * (draft_list_full['starter'] - draft_list_full['all star']) + \
-                                  -0.5 * (draft_list_full['rotation'] - draft_list_full['starter']) + \
-                                  -1.75 * (draft_list_full['makes NBA'] - draft_list_full['rotation']) + \
-                                  -5 * (1 - draft_list_full['makes NBA'])
-                                
-    #draft_list_full['mean DPM'] = w*draft_list_full['mean DPM'] + (1-w)*draft_list_full['pred_dpm']
-    draft_list_full['P5 DPM'] = w*draft_list_full['P5 DPM'] + (1-w)*draft_list_full['pred_dpm_p05']
-    draft_list_full['P25 DPM'] = w*draft_list_full['P25 DPM'] + (1-w)*draft_list_full['pred_dpm_p25']
-    draft_list_full['median DPM'] = w*draft_list_full['median DPM'] + (1-w)*draft_list_full['pred_dpm_median']
-    draft_list_full['P75 DPM'] = w*draft_list_full['P75 DPM'] + (1-w)*draft_list_full['pred_dpm_p75']
-    draft_list_full['P95 DPM'] = w*draft_list_full['P95 DPM'] + (1-w)*draft_list_full['pred_dpm_p95']
+    surv_cols = ['makes NBA', 'rotation', 'starter', 'all star', 'all nba', 'mvp']
+    surv = draft_list_full[surv_cols].to_numpy(dtype=float)
+    surv = np.clip(surv, 0.0, 1.0)
+    surv = np.minimum.accumulate(surv, axis=1)
+    draft_list_full[surv_cols] = surv
+
+    # Fixed GMM mapper from blended ordinal survival probabilities.
+    # Component 0 represents non-NBA outcomes; its mean is clamped at -5.0
+    # so the output distribution never places mass below the DPM floor.
+    gmm_mu = np.array([-5, -2.5, -0.65, 0.5, 1.6, 3.25, 5.5], dtype=float)
+    gmm_sigma = np.array([0.3, 0.85, 0.6, 0.55, 0.65, 0.9, 1.1], dtype=float)
+
+    weights = np.column_stack([
+        1.0 - surv[:, 0],
+        surv[:, 0] - surv[:, 1],
+        surv[:, 1] - surv[:, 2],
+        surv[:, 2] - surv[:, 3],
+        surv[:, 3] - surv[:, 4],
+        surv[:, 4] - surv[:, 5],
+        surv[:, 5]
+    ])
+    weights = np.clip(weights, 0.0, 1.0)
+    denom = weights.sum(axis=1, keepdims=True)
+    bad = denom[:, 0] <= 1e-9
+    weights[bad] = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=float)
+    denom = np.where(denom <= 1e-9, 1.0, denom)
+    weights = weights / denom
+
+    def gmm_cdf(x):
+        z = (x[:, None] - gmm_mu[None, :]) / gmm_sigma[None, :]
+        return np.sum(weights * scipy.stats.norm.cdf(z), axis=1)
+
+    def gmm_quantile(q):
+        lo = np.full(len(weights), -5.0, dtype=float)
+        hi = np.full(len(weights), float(np.max(gmm_mu + 5.0 * gmm_sigma)), dtype=float)
+        for _ in range(45):
+            mid = 0.5 * (lo + hi)
+            cdf_mid = gmm_cdf(mid)
+            lo = np.where(cdf_mid < q, mid, lo)
+            hi = np.where(cdf_mid >= q, mid, hi)
+        return np.maximum(0.5 * (lo + hi), -5.0)
+
+    draft_list_full['mean DPM'] = np.maximum(np.sum(weights * gmm_mu[None, :], axis=1), -5.0)
+    draft_list_full['P5 DPM'] = gmm_quantile(0.05)
+    draft_list_full['P25 DPM'] = gmm_quantile(0.25)
+    draft_list_full['median DPM'] = gmm_quantile(0.50)
+    draft_list_full['P75 DPM'] = gmm_quantile(0.75)
+    draft_list_full['P95 DPM'] = gmm_quantile(0.95)
     
     draft_list_full['makes NBA'] = round(draft_list_full['makes NBA'],4)
     draft_list_full['rotation'] = round(draft_list_full['rotation'],4)
@@ -2386,8 +2601,9 @@ def ensemble_draft_model(draft_list2,w,flag):
     print("mvp claiber players",round(draft_list_full['mvp'].sum(),2))
     print()
     
-    draft_list_full = draft_list_full[['pid', 'player', 'team', 'age', 'season', 'mean DPM', 'makes NBA', 'rotation',
-                                       'starter', 'all star', 'all nba', 'mvp', 'median DPM', 'P75 DPM', 'P95 DPM']] #'P5 DPM', 'P25 DPM',
+    draft_list_full = draft_list_full[['pid', 'player', 'team', 'age', 'season', 'mean DPM', 
+                                       'makes NBA', 'rotation', 'starter', 'all star', 'all nba', 'mvp', 
+                                       'P5 DPM', 'P25 DPM', 'median DPM', 'P75 DPM', 'P95 DPM']] #'P5 DPM', 'P25 DPM',
     draft_list_full = draft_list_full.set_index('pid')
     return draft_list_full
 
@@ -2403,4 +2619,4 @@ def ensemble_draft_model(draft_list2,w,flag):
 
 #full_summary, full_results = hyperparameter_tuning(30,test)
 
-draft_list = ensemble_draft_model(test,0.6,0) #weight to mdist model, full vs representative
+draft_list = ensemble_draft_model(test,0.5,0) #weight to mdist model, full vs representative
