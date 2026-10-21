@@ -22,8 +22,8 @@ import matplotlib.pyplot as plt
 
 pd.set_option('mode.chained_assignment', None)
 
-gw = 15
-gd = 5  #set this to 0 to get the whole game week
+gw = 1
+gd = 2  #set this to 0 to get the whole game week
 
 #skewed_pdf('Paul George','pts', 3.5, gw_summary.copy())
 
@@ -61,7 +61,7 @@ def get_fixture_info(player_info):
     
     return(fixtures)
 
-def extract_epm_data():
+def extract_epm_data(s):
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
     }
@@ -83,7 +83,7 @@ def extract_epm_data():
         if script.string:  # Check if the script tag has content
             script_contents.append(script.string.strip())    
     
-    pattern = r'\{season:2026,game_dt.*?\}'
+    pattern = fr'\{{season:{s},game_dt.*?\}}'
     matches = re.findall(pattern, data)
     data_list = [match.strip() for match in matches]
     return data_list
@@ -160,7 +160,7 @@ def injury_status():
     injuries['Player'] = injuries['Player'].str.replace('Ş','S')
     injuries['Player'] = injuries['Player'].str.replace('Š','S')
     injuries['Player'] = injuries['Player'].str.replace('è','e')
-    #injuries['Player'] = injuries['Player'].str.replace('P.J. Washington Jr.','P.J. Washington')
+    injuries['Player'] = injuries['Player'].str.replace('Jimmy Butler III','Jimmy Butler')
     #injuries['Player'] = injuries['Player'].str.replace('GG Jackson II','GG Jackson')
     #injuries['Player'] = injuries['Player'].str.replace('Xavier Tillman Sr.','Xavier Tillman')
     #injuries['Player'] = injuries['Player'].str.replace('Jeff Dowtin Jr.','Jeff Dowtin')
@@ -190,7 +190,7 @@ def matchup_stats(home,away,matchup,team):
     league_pace = sum(c_season['weight']*c_season['Pace'])/sum(c_season['weight'])
     #league_avg_ortg = sum(c_season['weight']*c_season['ORtg'])/sum(c_season['weight'])
     """
-    game_pace *= (99/ matchup['adj_pace'].mean()) # 99 for regular season, 95 for the playoffs
+    game_pace *= (99/ matchup['adj_pace'].mean()) #!!! 99 for regular season, 96 for the playoffs
     league_avg_ortg = 115 # 115 regular season, 113 playoffs
     
     home_pace_factor = game_pace/matchup.loc[matchup['team_alias']==home,'adj_pace'].values[0]
@@ -321,30 +321,30 @@ def skewed_pdf(player,stat,target_val,df):
     """    
 
 #%% player names
-player_names,team_id = get_player_info()
-player_names = player_names.loc[player_names['code']>1]
-player_names = player_names.sort_values(['now_cost', 'team'], ascending=[False, True])
+_player_names,_team_id = get_player_info()
+_player_names = _player_names.loc[_player_names['code']>1]
+_player_names = _player_names.sort_values(['now_cost', 'team'], ascending=[False, True])
 
 #%% fixtures by team
 #team_list = player_names.groupby('team').first()
 #team_list = team_list.reset_index()
-fixtures = get_fixture_info(player_names.groupby('team').first().reset_index())
-fixtures = fixtures.drop('id',axis=1)
-fixtures['event_name'] = fixtures['event_name'].str.replace('Gameweek ', 'GD_')
-fixtures['event_name'] = fixtures['event_name'].str.replace(" - Day ", "_") 
-fixtures[['event_name', 'gameweek','gameday']] = fixtures['event_name'].str.split('_', expand=True)
+_fixtures = get_fixture_info(_player_names.groupby('team').first().reset_index())
+_fixtures = _fixtures.drop('id',axis=1)
+_fixtures['event_name'] = _fixtures['event_name'].str.replace('Gameweek ', 'GD_')
+_fixtures['event_name'] = _fixtures['event_name'].str.replace(" - Day ", "_") 
+_fixtures[['event_name', 'gameweek','gameday']] = _fixtures['event_name'].str.split('_', expand=True)
 
 #%% get the fixtures for the given gameweek
 #df_adj = player_data.copy()
-gw_fixtures = fixtures[(fixtures['gameweek']==str(gw))&(fixtures['is_home']==True)]
-gw_fixtures = gw_fixtures[['team_h', 'team_a', 'gameweek', 'gameday']]
-gw_fixtures = gw_fixtures.merge(team_id, left_on=['team_h'], right_on=['id'], how='left')
-gw_fixtures = gw_fixtures.merge(team_id, left_on=['team_a'], right_on=['id'], how='left')
+_gw_fixtures = _fixtures[(_fixtures['gameweek']==str(gw))&(_fixtures['is_home']==True)]
+_gw_fixtures = _gw_fixtures[['team_h', 'team_a', 'gameweek', 'gameday']]
+_gw_fixtures = _gw_fixtures.merge(_team_id, left_on=['team_h'], right_on=['id'], how='left')
+_gw_fixtures = _gw_fixtures.merge(_team_id, left_on=['team_a'], right_on=['id'], how='left')
 
 if(gd != 0):
-    gw_fixtures = gw_fixtures[gw_fixtures['gameday']==str(gd)]
+    _gw_fixtures = _gw_fixtures[_gw_fixtures['gameday']==str(gd)]
 else:
-    gw_fixtures = gw_fixtures
+    _gw_fixtures = _gw_fixtures
 
 #%% get the latest injury report from yahoo
 injury_report = injury_status()
@@ -352,10 +352,14 @@ injury_report[['Status', 'Type']] = injury_report['Status'].str.split('(', expan
 injury_report['Type'] = injury_report['Type'].str.replace(")","")
 injury_report = injury_report[injury_report['Type']!='Rest']
 injury_report['injury'] = 0.0
+#designations
 injury_report.loc[injury_report['Status']=='Day-To-Day ','injury'] = 0.9
+injury_report.loc[injury_report['Status']=='Probable ','injury'] = 0.75
+injury_report.loc[injury_report['Status']=='Doubtful','injury'] = 0.25
+injury_report.loc[injury_report['Status']=='Questionable ','injury'] = 0.5
 
 #%% extract data from dunks and threes
-player_data = extract_epm_data()
+player_data = extract_epm_data(2027)
 player_data = modify_strings(player_data)
 player_data = convert_string_list_to_dict(player_data)
 
@@ -385,12 +389,8 @@ player_data['injury'] = player_data['injury'].fillna(1)
 #custom mins adjustments for players are being overprojected
 player_data.loc[player_data['player_id']==1641787,'injury'] = 0.25 #Tosan Evbuomwan
 player_data.loc[player_data['player_id']==1631131,'injury'] = 0.25 #Oscar Tshiebwe
-player_data.loc[player_data['player_id']==1642013,'injury'] = 0.25 #Malik Williams
-player_data.loc[player_data['player_id']==1642402,'injury'] = 0.25 #Enrique Freeman
-player_data.loc[player_data['player_id']==1626156,'injury'] = 0.25 #D'Angelo Russell
-player_data.loc[player_data['player_id']==1641998,'injury'] = 0.25 #Trey Jemison
-player_data.loc[player_data['player_id']==1642050,'injury'] = 0.25 #Jackson Rowe
 
+#injury designations should be applied after mins are adjusted, verify this
 player_data['p_mp_48'] *= player_data['injury']
 player_data = mins_adjustment(player_data)
 
@@ -406,13 +406,13 @@ team_strength = team_strength[['team_alias', 'adj_pace', 'adj_off', 'adj_def', '
 #%% game level projections
 #game_stats = matchup_stats('OKC', 'SAC', team_strength, df_adj.copy())
 gw_summary = []; results_summary = [['Home','home pts','away pts','Away']]
-for f in gw_fixtures.values:
-    game_stats,result = matchup_stats(f[6], f[9], team_strength, player_data.copy())
-    game_stats['week'] = f[2]
-    game_stats['day'] = f[3]
-    gw_summary.append(game_stats)
-    results_summary.append(result)
-del f, game_stats, result, gw_fixtures
+for _f in _gw_fixtures.values:
+    _game_stats,_result = matchup_stats(_f[6], _f[9], team_strength, player_data.copy())
+    _game_stats['week'] = _f[2]
+    _game_stats['day'] = _f[3]
+    gw_summary.append(_game_stats)
+    results_summary.append(_result)
+#del f, game_stats, result, gw_fixtures
 
 results_summary = pd.DataFrame(results_summary[1:], columns=results_summary[0])
 results_summary['spread'] = results_summary['home pts'] - results_summary['away pts']
@@ -429,7 +429,7 @@ gw_pivot.columns = gw_pivot.columns.droplevel(0)
 gw_pivot['EV total'] = gw_pivot.sum(axis=1, skipna=True)
 gw_pivot = gw_pivot.reset_index()
 gw_pivot = gw_pivot.sort_values(by='EV total', ascending=False)
-gw_pivot = gw_pivot.merge(player_names[['code','now_cost']], left_on=['player_id'], right_on=['code'], how='left')
+gw_pivot = gw_pivot.merge(_player_names[['code','now_cost']], left_on=['player_id'], right_on=['code'], how='left')
 gw_pivot = gw_pivot.drop('code', axis=1)
 gw_pivot['now_cost'] /= 10
 gw_pivot['efficiency'] = gw_pivot['EV total'] / gw_pivot['now_cost']
