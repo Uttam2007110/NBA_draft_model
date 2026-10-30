@@ -22,8 +22,9 @@ import matplotlib.pyplot as plt
 
 pd.set_option('mode.chained_assignment', None)
 
-gw = 1
-gd = 2  #set this to 0 to get the whole game week
+_custom_gd = 0
+gw = 2
+gd = 0  #set this to 0 to get the whole game week
 
 #skewed_pdf('Paul George','pts', 3.5, gw_summary.copy())
 
@@ -31,7 +32,7 @@ gd = 2  #set this to 0 to get the whole game week
 def get_player_info():
     
     url = "https://nbafantasy.nba.com/api/bootstrap-static/"
-    r = requests.get(url,verify=False)
+    r = requests.get(url) #,verify=False
     json = r.json()
     elements = pd.DataFrame(json['elements'])
     elements['name'] = elements['first_name'] + ' ' + elements['second_name']
@@ -47,7 +48,7 @@ def get_fixture_info(player_info):
     
     for i in player_info['id']:
         url = "https://nbafantasy.nba.com/api/element-summary/"+str(i)+"/"
-        r = requests.get(url,verify=False)
+        r = requests.get(url) #,verify=False
         json = r.json()
         if json == {'detail': 'Not found.'}:
             continue
@@ -69,7 +70,7 @@ def extract_epm_data(s):
     url = 'https://dunksandthrees.com/epm'
     
     try:
-        response = requests.get(url, verify=False, headers=headers)
+        response = requests.get(url,headers=headers) #verify=False
         response.raise_for_status()  # Raise an exception for bad status codes
     except requests.exceptions.RequestException as e:
         print(f"Error fetching the URL: {e}")
@@ -334,17 +335,22 @@ _fixtures['event_name'] = _fixtures['event_name'].str.replace('Gameweek ', 'GD_'
 _fixtures['event_name'] = _fixtures['event_name'].str.replace(" - Day ", "_") 
 _fixtures[['event_name', 'gameweek','gameday']] = _fixtures['event_name'].str.split('_', expand=True)
 
+_fixtures['gameweek'] = _fixtures['gameweek'].astype(int)
+_fixtures['gameday'] = _fixtures['gameday'].astype(int)
+
 #%% get the fixtures for the given gameweek
 #df_adj = player_data.copy()
-_gw_fixtures = _fixtures[(_fixtures['gameweek']==str(gw))&(_fixtures['is_home']==True)]
+if(_custom_gd != 1):
+    gw = min(_fixtures['gameweek'])
+    gd = min(_fixtures.loc[_fixtures['gameweek']==gw,'gameday'])
+    
+_gw_fixtures = _fixtures[(_fixtures['gameweek']==gw)&(_fixtures['is_home']==True)]
 _gw_fixtures = _gw_fixtures[['team_h', 'team_a', 'gameweek', 'gameday']]
 _gw_fixtures = _gw_fixtures.merge(_team_id, left_on=['team_h'], right_on=['id'], how='left')
 _gw_fixtures = _gw_fixtures.merge(_team_id, left_on=['team_a'], right_on=['id'], how='left')
 
-if(gd != 0):
-    _gw_fixtures = _gw_fixtures[_gw_fixtures['gameday']==str(gd)]
-else:
-    _gw_fixtures = _gw_fixtures
+if(gd != 0): _gw_fixtures = _gw_fixtures[_gw_fixtures['gameday']==gd]
+else: _gw_fixtures = _gw_fixtures
 
 #%% get the latest injury report from yahoo
 injury_report = injury_status()
@@ -389,6 +395,10 @@ player_data['injury'] = player_data['injury'].fillna(1)
 #custom mins adjustments for players are being overprojected
 player_data.loc[player_data['player_id']==1641787,'injury'] = 0.25 #Tosan Evbuomwan
 player_data.loc[player_data['player_id']==1631131,'injury'] = 0.25 #Oscar Tshiebwe
+player_data.loc[player_data['player_id']==1642942,'injury'] = 0.5  #Jahmai Mashack
+player_data.loc[player_data['player_id']==1642877,'injury'] = 0.25 #Micah Peavy
+player_data.loc[player_data['player_id']==1643717,'injury'] = 0.5  #Josh Dix
+player_data.loc[player_data['player_id']==1641712,'injury'] = 0.25 #Rayan Rupert
 
 #injury designations should be applied after mins are adjusted, verify this
 player_data['p_mp_48'] *= player_data['injury']
